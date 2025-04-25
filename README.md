@@ -131,16 +131,11 @@ Run `alcove run` to fetch any data that's out of date, and build any derived tab
 For testing with S3-compatible storage, this project uses automatically managed containers:
 
 ```bash
-# Regular testing - continues even if MinIO isn't available
+# Run tests with Docker-based MinIO
 make test
-
-# Strict testing - fails if MinIO container isn't available
-make test-strict
 ```
 
-The test environment provides two modes:
-1. **Default mode**: Attempts to use MinIO container but won't fail if unavailable
-2. **Strict mode**: Requires MinIO container, fails if Docker isn't running
+All tests require Docker with MinIO container to be available.
 
 ### Docker Context Support
 
@@ -167,10 +162,13 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
 
 ## Changelog
 
+- `dev` (unreleased)
+  - Simplified testing approach by always requiring Docker with MinIO
+  - Added PyPI package configuration
+
 - `0.1.1` (2025-04-25)
   - Renamed project from "shelf" to "alcove"
   - Added automated Docker container management for testing with MinIO
-  - Added two testing modes: standard and strict (requires Docker)
   - Enhanced Docker context support for different environments (Docker Desktop, Colima, OrbStack)
   - Improved S3-compatible storage testing reliability
   - Fixed test fixtures to use consistent credentials
