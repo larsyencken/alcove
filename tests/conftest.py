@@ -34,9 +34,6 @@ def minio_container():
         yield None
         return
     
-    # Check if we want to force MinIO container to be used
-    require_minio = os.environ.get("REQUIRE_MINIO", "1") == "1"
-    
     # Get Docker host from environment if available
     docker_host = os.environ.get("DOCKER_HOST")
     if docker_host:
@@ -103,10 +100,7 @@ def minio_container():
             print("MinIO container is running and responding")
             s.close()
         except Exception as conn_error:
-            if require_minio:
-                pytest.fail(f"MinIO container is not responding on port 9000: {conn_error}")
-            else:
-                print(f"WARNING: MinIO container not responding on port 9000: {conn_error}")
+            pytest.fail(f"MinIO container is not responding on port 9000: {conn_error}")
         
         # Successfully initialized Docker
         print("Using Docker-managed MinIO for testing")
@@ -121,12 +115,7 @@ def minio_container():
         
     except Exception as e:
         error_msg = f"Docker or MinIO not available: {str(e)}"
-        if require_minio:
-            pytest.fail(error_msg)
-        else:
-            print(f"WARNING: {error_msg}")
-            print("Tests will be skipped or may fail if they require S3")
-            yield None
+        pytest.fail(error_msg)
 
 
 @pytest.fixture
