@@ -4,3 +4,5 @@
 - Avoid modifying the global Python environment or relying on globally installed packages
 - Each time you commit a change, decide if something is worth adding to the changelog in the README. Keep a `dev` line for changes since the last tagged version.
 - When you bump the version number, and commit that change, be sure to tag the commit as well
+- Create and publish a new release with `make publish`
+- Whenever committing, check for unstaged files first
