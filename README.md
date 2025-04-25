@@ -176,9 +176,9 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
   - Fixed test fixtures to use consistent credentials
 
 - `0.1.0` (Initial release)
-  - Initialise a repo with `alcove.yaml`
-  - `alcove snapshot` and `alcove run` with file and directory support
+  - Initialise a repo with `shelf.yaml`
+  - `shelf snapshot` and `shelf run` with file and directory support
   - Only fetch things that are out of date
-  - `alcove list` to see what datasets are available
-  - `alcove audit` to ensure your alcove is coherent and correct
-  - `alcove db` to enter an interactive DuckDB shell with all your data
+  - `shelf list` to see what datasets are available
+  - `shelf audit` to ensure your alcove is coherent and correct
+  - `shelf db` to enter an interactive DuckDB shell with all your data
