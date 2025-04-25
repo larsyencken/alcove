@@ -3,8 +3,8 @@ from typing import List
 
 import graphlib
 
-from shelf import snapshots, tables
-from shelf.types import Dag, StepURI
+from alcove import snapshots, tables
+from alcove.types import Dag, StepURI
 
 
 def prune_with_regex(dag: Dag, regex: str, descendents: bool = True) -> Dag:

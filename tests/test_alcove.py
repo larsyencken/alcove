@@ -1,45 +1,24 @@
-import os
 import shutil
 from pathlib import Path
 
 import duckdb
 import pytest
 import yaml
-from shelf import (
-    Shelf,
+from alcove import (
+    Alcove,
     _table_aliases,
-    audit_shelf,
+    audit_alcove,
     export_duckdb,
     list_steps,
     plan_and_run,
-    snapshot_to_shelf,
+    snapshot_to_alcove,
 )
-from shelf.paths import BASE_DIR, TABLE_SCRIPT_DIR
-from shelf.types import StepURI
-from shelf.utils import checksum_folder, load_yaml
+from alcove.paths import BASE_DIR, TABLE_SCRIPT_DIR
+from alcove.types import StepURI
+from alcove.utils import checksum_folder, load_yaml
 
 
-@pytest.fixture
-def setup_test_environment(tmp_path):
-    # Setup temporary environment for testing
-    os.environ["S3_ACCESS_KEY"] = os.environ.get("TEST_ACCESS_KEY", "justtesting")
-    os.environ["S3_SECRET_KEY"] = os.environ.get("TEST_SECRET_KEY", "justtesting")
-    os.environ["S3_BUCKET_NAME"] = os.environ.get("TEST_BUCKET_NAME", "test")
-    os.environ["S3_ENDPOINT_URL"] = os.environ.get(
-        "TEST_ENDPOINT_URL", "http://localhost:9000"
-    )
-
-    # Create test directory and files
-    test_dir = tmp_path / "test_dir"
-    test_dir.mkdir()
-
-    # Change to test directory
-    os.chdir(test_dir)
-
-    yield test_dir
-
-    # Cleanup
-    shutil.rmtree(test_dir)
+# Fixture now moved to conftest.py
 
 
 def test_step_uri():
@@ -76,15 +55,15 @@ def test_add_file(setup_test_environment):
         / "2024-07-26.meta.yaml"
     )
     gitignore_file = tmp_path / ".gitignore"
-    shelf_yaml_file = tmp_path / "shelf.yaml"
+    shelf_yaml_file = tmp_path / "alcove.yaml"
 
     # create dummy file
     new_file = tmp_path / "file1.txt"
     new_file.write_text("Hello, World!")
 
     # add file to shelf with description
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file, uri.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file, uri.path)
 
     # check for data and metadata
     assert data_file.exists()
@@ -132,7 +111,7 @@ def test_shelve_directory(setup_test_environment):
     data_path = tmp_path / "data/snapshots/" / path
     metadata_file = (tmp_path / "data/snapshots" / path).with_suffix(".meta.yaml")
     gitignore_file = tmp_path / ".gitignore"
-    shelf_yaml_file = tmp_path / "shelf.yaml"
+    shelf_yaml_file = tmp_path / "alcove.yaml"
 
     # create dummy data
     local_data_dir = tmp_path / "example"
@@ -141,8 +120,8 @@ def test_shelve_directory(setup_test_environment):
     (local_data_dir / "file2.txt").write_text("Hello, Cosmos!")
 
     # add to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(local_data_dir, path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(local_data_dir, path)
 
     # check the right local files are created
     assert data_path.is_dir()
@@ -182,15 +161,15 @@ def test_add_file_with_arbitrary_depth_namespace(setup_test_environment):
     metadata_file = (
         tmp_path / "data/snapshots" / "a" / "b" / "c" / "2024-07-26.meta.yaml"
     )
-    shelf_yaml_file = tmp_path / "shelf.yaml"
+    shelf_yaml_file = tmp_path / "alcove.yaml"
 
     # create dummy file
     new_file = tmp_path / "file1.txt"
     new_file.write_text("Hello, World!")
 
     # add file to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file, path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file, path)
 
     # check for data and metadata
     assert data_file.exists()
@@ -216,7 +195,7 @@ def test_shelve_directory_with_arbitrary_depth_namespace(setup_test_environment)
     uri = StepURI.parse("snapshot://a/b/c/latest")
     data_path = tmp_path / "data/snapshots" / uri.path
     metadata_file = (tmp_path / "data/snapshots" / uri.path).with_suffix(".meta.yaml")
-    shelf_yaml_file = tmp_path / "shelf.yaml"
+    shelf_yaml_file = tmp_path / "alcove.yaml"
 
     # create dummy data
     parent = tmp_path / "example"
@@ -227,8 +206,8 @@ def test_shelve_directory_with_arbitrary_depth_namespace(setup_test_environment)
     (parent / "file2.txt").write_text("Hello, Cosmos!")
 
     # add to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(parent, uri.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(parent, uri.path)
 
     # check the right local files are created
     assert data_path.is_dir()
@@ -266,9 +245,9 @@ def test_list_datasets(setup_test_environment):
     new_file2.write_text("Hello, Cosmos!")
 
     # add files to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file1, uri1.path)
-    snapshot_to_shelf(new_file2, uri2.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file1, uri1.path)
+    snapshot_to_alcove(new_file2, uri2.path)
     shelf.refresh()
 
     assert list_steps(shelf) == [uri1, uri2]
@@ -286,9 +265,9 @@ def test_list_datasets_with_regex(setup_test_environment):
     new_file2.write_text("Hello, Cosmos!")
 
     # add files to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file1, uri1.path)
-    snapshot_to_shelf(new_file2, uri2.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file1, uri1.path)
+    snapshot_to_alcove(new_file2, uri2.path)
 
     shelf.refresh()
     assert list_steps(shelf, str(uri1)) == [uri1]
@@ -306,9 +285,9 @@ def test_list_datasets_with_paths(setup_test_environment):
     new_file2.write_text("Hello, Cosmos!")
 
     # add files to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file1, uri1.path)
-    snapshot_to_shelf(new_file2, uri2.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file1, uri1.path)
+    snapshot_to_alcove(new_file2, uri2.path)
     shelf.refresh()
 
     assert list_steps(shelf, paths=True) == [
@@ -329,9 +308,9 @@ def test_get_only_out_of_date_datasets(setup_test_environment):
     new_file2.write_text("Hello, Cosmos!")
 
     # add files to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file1, uri1.path)
-    snapshot_to_shelf(new_file2, uri2.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file1, uri1.path)
+    snapshot_to_alcove(new_file2, uri2.path)
 
     # modify one of the files to make it out of date
     data_file1 = (
@@ -366,7 +345,7 @@ def test_export_duckdb(setup_test_environment):
     uri2 = StepURI.parse("table://test_namespace/test_table2/2024-07-27")
 
     # add table scripts to shelf
-    shelf = Shelf.init()
+    shelf = Alcove.init()
     shelf.new_table(uri1.path, [])
     shelf.new_table(uri2.path, [])
     exec1 = (TABLE_SCRIPT_DIR / uri1.path).with_suffix(".py")
@@ -414,8 +393,8 @@ def test_audit_can_fix_manifest_checksum(setup_test_environment):
     (local_data_dir / "file2.txt").write_text("Hello, Cosmos!")
 
     # add to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(local_data_dir, path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(local_data_dir, path)
     shelf.refresh()
 
     # modify the checksum in the metadata to simulate an incorrect checksum
@@ -427,10 +406,10 @@ def test_audit_can_fix_manifest_checksum(setup_test_environment):
 
     # run the audit command
     with pytest.raises(Exception):
-        audit_shelf(shelf)
+        audit_alcove(shelf)
 
     # now again, but fix the error
-    audit_shelf(shelf, fix=True)
+    audit_alcove(shelf, fix=True)
 
     # check that the audit command fixed the incorrect checksum
     metadata = load_yaml(metadata_file)
@@ -461,7 +440,7 @@ def test_cache_hit(setup_test_environment):
     cache_file = (
         Path.home()
         / ".cache"
-        / "shelf"
+        / "alcove"
         / "df"
         / "fd"
         / "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
@@ -472,8 +451,8 @@ def test_cache_hit(setup_test_environment):
     new_file.write_text("Hello, World!")
 
     # add file to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file, uri.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file, uri.path)
 
     # check for data and metadata
     assert data_file.exists()
@@ -514,7 +493,7 @@ def test_cache_miss(setup_test_environment):
     cache_file = (
         Path.home()
         / ".cache"
-        / "shelf"
+        / "alcove"
         / "dffd"
         / "6021"
         / "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f"
@@ -525,8 +504,8 @@ def test_cache_miss(setup_test_environment):
     new_file.write_text("Hello, World!")
 
     # add file to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file, uri.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file, uri.path)
 
     # check for data and metadata
     assert data_file.exists()
@@ -556,9 +535,9 @@ def test_resolve_latest_dependency(setup_test_environment):
     new_file2.write_text("Hello, Cosmos!")
 
     # add files to shelf
-    shelf = Shelf.init()
-    snapshot_to_shelf(new_file1, uri1.path)
-    snapshot_to_shelf(new_file2, uri2.path)
+    shelf = Alcove.init()
+    snapshot_to_alcove(new_file1, uri1.path)
+    snapshot_to_alcove(new_file2, uri2.path)
     shelf.refresh()
 
     # latest resolves to latest

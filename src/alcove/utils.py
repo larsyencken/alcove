@@ -5,8 +5,8 @@ from typing import Any, Union
 import yaml
 from rich.console import Console
 
-from shelf.paths import BASE_DIR
-from shelf.types import Checksum, Manifest
+from alcove.paths import BASE_DIR
+from alcove.types import Checksum, Manifest
 
 console = Console()
 

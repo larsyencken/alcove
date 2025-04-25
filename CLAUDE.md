@@ -1,0 +1,2 @@
+- After each change, run `make test-strict` to check project health (requires Docker)
+- Install packages with `uv add <pkg>` or `uv add --dev <pkg>`

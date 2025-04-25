@@ -11,12 +11,12 @@ from typing import Literal
 import duckdb
 from dotenv import load_dotenv
 
-from shelf import steps
-from shelf.core import Shelf
-from shelf.exceptions import StepDefinitionError
-from shelf.snapshots import Snapshot
-from shelf.types import StepURI
-from shelf.utils import add_to_gitignore, checksum_manifest, console
+from alcove import steps
+from alcove.core import Alcove
+from alcove.exceptions import StepDefinitionError
+from alcove.snapshots import Snapshot
+from alcove.types import StepURI
+from alcove.utils import add_to_gitignore, checksum_manifest, console
 
 load_dotenv()
 
@@ -26,7 +26,7 @@ BLACKLIST = [".DS_Store"]
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Shelf a data file or directory by adding it in a content-addressable way to the S3-compatible store."
+        description="Add a data file or directory in a content-addressable way to the S3-compatible store."
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -89,11 +89,11 @@ def main():
     )
 
     subparsers.add_parser(
-        "init", help="Initialize the shelf with the necessary directories"
+        "init", help="Initialize the alcove with the necessary directories"
     )
 
     audit_parser = subparsers.add_parser(
-        "audit", help="Audit the shelf metadata and validate the metadata of every step"
+        "audit", help="Audit the alcove metadata and validate the metadata of every step"
     )
     audit_parser.add_argument(
         "--fix",
@@ -147,45 +147,45 @@ def main():
     args = parser.parse_args()
 
     if args.command == "init":
-        return init_shelf()
+        return init_alcove()
 
-    shelf = Shelf()
+    alcove = Alcove()
 
     if args.command == "snapshot":
-        snapshot_to_shelf(
+        snapshot_to_alcove(
             Path(args.file_path), args.dataset_name, edit=args.edit, force=args.force
         )
         return
 
     elif args.command == "list":
-        return list_steps_cmd(shelf, args.regex, args.paths)
+        return list_steps_cmd(alcove, args.regex, args.paths)
 
     elif args.command == "run":
-        return plan_and_run(shelf, args.path, args.force, args.dry_run)
+        return plan_and_run(alcove, args.path, args.force, args.dry_run)
 
     elif args.command == "audit":
-        return audit_shelf(shelf, args.fix)
+        return audit_alcove(alcove, args.fix)
 
     elif args.command == "export-duckdb":
-        return export_duckdb(shelf, args.db_file, args.short)
+        return export_duckdb(alcove, args.db_file, args.short)
 
     elif args.command == "db":
         if args.query:
-            return execute_query(shelf, args.query, names=args.names, csv=args.csv)
-        return duckdb_shell(shelf, names=args.names)
+            return execute_query(alcove, args.query, names=args.names, csv=args.csv)
+        return duckdb_shell(alcove, names=args.names)
 
     elif args.command == "new-table":
-        return new_table(shelf, args.table_path, args.dependencies, args.edit)
+        return new_table(alcove, args.table_path, args.dependencies, args.edit)
 
     parser.print_help()
 
 
-def init_shelf() -> None:
-    print("Initializing shelf")
-    Shelf.init()
+def init_alcove() -> None:
+    print("Initializing alcove")
+    Alcove.init()
 
 
-def snapshot_to_shelf(
+def snapshot_to_alcove(
     file_path: Path, dataset_name: str, edit: bool = False, force: bool = False
 ) -> Snapshot:
     _check_s3_credentials()
@@ -194,13 +194,13 @@ def snapshot_to_shelf(
     dataset_name = _maybe_add_version(dataset_name)
 
     # sanity check that it does not exist
-    shelf = Shelf()
+    alcove = Alcove()
     proposed_uri = StepURI("snapshot", dataset_name)
-    if proposed_uri in shelf.steps and not force:
-        raise ValueError(f"Dataset already exists in shelf: {proposed_uri}")
+    if proposed_uri in alcove.steps and not force:
+        raise ValueError(f"Dataset already exists in alcove: {proposed_uri}")
 
     existing_metadata = {}
-    if proposed_uri in shelf.steps:
+    if proposed_uri in alcove.steps:
         for k, v in Snapshot.load(dataset_name).get_metadata().items():
             if k not in ["checksum", "manifest", "date_accessed"]:
                 existing_metadata[k] = v
@@ -215,21 +215,21 @@ def snapshot_to_shelf(
     if edit:
         subprocess.run(["vim", snapshot.metadata_path])
 
-    shelf.steps[proposed_uri] = []
-    shelf.save()
+    alcove.steps[proposed_uri] = []
+    alcove.save()
 
     return snapshot
 
 
-def list_steps_cmd(shelf: Shelf, regex: str | None = None, paths: bool = False) -> None:
-    for step in list_steps(shelf, regex, paths):
+def list_steps_cmd(alcove: Alcove, regex: str | None = None, paths: bool = False) -> None:
+    for step in list_steps(alcove, regex, paths):
         print(step)
 
 
 def list_steps(
-    shelf: Shelf, regex: str | None = None, paths: bool = False
+    alcove: Alcove, regex: str | None = None, paths: bool = False
 ) -> list[Path] | list[StepURI]:
-    steps = sorted(shelf.steps)
+    steps = sorted(alcove.steps)
 
     if regex:
         steps = [s for s in steps if re.search(regex, str(s))]
@@ -241,21 +241,21 @@ def list_steps(
 
 
 def plan_and_run(
-    shelf: Shelf,
+    alcove: Alcove,
     regex: str | None = None,
     force: bool = False,
     dry_run: bool = False,
 ) -> None:
     # to help unit testing
-    shelf.refresh()
+    alcove.refresh()
 
     # XXX in the future, we could create a Plan object that explains why each step has
     #     been selected to be run, even down to the level of which checksums are out of
     #     date or which files are missing
-    dag = shelf.steps
+    dag = alcove.steps
 
     for step, dependencies in dag.items():
-        dag[step] = resolve_latest(dependencies, shelf)
+        dag[step] = resolve_latest(dependencies, alcove)
 
     if regex:
         dag = steps.prune_with_regex(dag, regex)
@@ -270,11 +270,11 @@ def plan_and_run(
     steps.execute_dag(dag, dry_run=dry_run)
 
 
-def resolve_latest(dependencies: list[StepURI], shelf: Shelf) -> list[StepURI]:
+def resolve_latest(dependencies: list[StepURI], alcove: Alcove) -> list[StepURI]:
     resolved = []
     for dep in dependencies:
         if dep.path.endswith("latest"):
-            latest_version = shelf.get_latest_version(dep)
+            latest_version = alcove.get_latest_version(dep)
             resolved.append(latest_version)
         else:
             resolved.append(dep)
@@ -282,14 +282,14 @@ def resolve_latest(dependencies: list[StepURI], shelf: Shelf) -> list[StepURI]:
     return resolved
 
 
-def export_duckdb(shelf: Shelf, db_file: str, short: bool = False) -> None:
+def export_duckdb(alcove: Alcove, db_file: str, short: bool = False) -> None:
     # Ensure all tables are built
-    plan_and_run(shelf)
+    plan_and_run(alcove)
 
     # Connect to DuckDB
     conn = duckdb.connect(db_file)
 
-    tables = _get_tables(shelf)
+    tables = _get_tables(alcove)
     for table in tables:
         table_name = table.replace("/", "_").replace("-", "").rsplit(".", 1)[0]
         table_path = (Path("data/tables") / table).with_suffix(".parquet")
@@ -312,11 +312,11 @@ def export_duckdb(shelf: Shelf, db_file: str, short: bool = False) -> None:
     conn.close()
 
 
-def audit_shelf(shelf: Shelf, fix: bool = False) -> None:
-    # XXX in the future, we could automatically upgrade from one shelf format
+def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
+    # XXX in the future, we could automatically upgrade from one alcove format
     #     version to another, if there were breaking changes
-    print(f"Auditing {len(shelf.steps)} steps")
-    for step in shelf.steps:
+    print(f"Auditing {len(alcove.steps)} steps")
+    for step in alcove.steps:
         audit_step(step, fix)
         console.print(f"[blue]{'OK':>5}[/blue]   {step}")
 
@@ -351,23 +351,23 @@ def audit_step(step: StepURI, fix: bool = False) -> None:
 
 
 def new_table(
-    shelf: Shelf, table_path: str, dependencies: list[str], edit: bool = False
+    alcove: Alcove, table_path: str, dependencies: list[str], edit: bool = False
 ) -> None:
     table_uri = StepURI("table", table_path)
-    if table_uri in shelf.steps:
-        raise ValueError(f"Table already exists in shelf: {table_uri}")
+    if table_uri in alcove.steps:
+        raise ValueError(f"Table already exists in alcove: {table_uri}")
 
-    shelf.steps[table_uri] = [StepURI.parse(dep) for dep in dependencies]
-    shelf.save()
+    alcove.steps[table_uri] = [StepURI.parse(dep) for dep in dependencies]
+    alcove.save()
 
 
 def execute_query(
-    shelf: Shelf,
+    alcove: Alcove,
     query: str,
     names: Literal["short", "full", "both"] = "both",
     csv: bool = False,
 ) -> None:
-    tables = _get_tables(shelf)
+    tables = _get_tables(alcove)
 
     # Create temporary views
     conn = duckdb.connect(":memory:")
@@ -400,11 +400,11 @@ def execute_query(
     conn.close()
 
 
-def duckdb_shell(shelf: Shelf, names: str = "both") -> None:
+def duckdb_shell(alcove: Alcove, names: str = "both") -> None:
     if names not in ("both", "short", "full"):
         raise ValueError("Names parameter must be one of 'short', 'full' or 'both'")
 
-    tables = _get_tables(shelf)
+    tables = _get_tables(alcove)
 
     sql_parts: list[str] = []
     for path in tables:
@@ -435,9 +435,9 @@ def _path_to_snake(path: str) -> str:
     return path.replace("/", "_").replace("-", "").rsplit(".", 1)[0]
 
 
-def _get_tables(shelf: Shelf) -> list[str]:
+def _get_tables(alcove: Alcove) -> list[str]:
     tables = []
-    for step in shelf.steps:
+    for step in alcove.steps:
         if step.scheme == "table":
             tables.append(step.path)
 

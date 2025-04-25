@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from functools import total_ordering
 from typing import Literal
 
-from shelf import paths
+from alcove import paths
 
 type Checksum = str
 type FileName = str

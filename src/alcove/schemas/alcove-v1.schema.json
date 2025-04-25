@@ -1,15 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Shelf config",
+  "title": "Alcove config",
   "type": "object",
   "properties": {
     "version": {
       "type": "integer",
-      "description": "Version of the shelf config file"
+      "description": "Version of the alcove config file"
     },
     "data_dir": {
       "type": "string",
-      "description": "Directory where the shelf data is stored, relative to this file.",
+      "description": "Directory where the alcove data is stored, relative to this file.",
       "default": "data"
     },
     "steps": {

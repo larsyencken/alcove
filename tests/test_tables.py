@@ -1,37 +1,15 @@
-import os
 import random
-import shutil
 from typing import Any, Optional
 
 import polars as pl
 import pytest
-from shelf.paths import SNAPSHOT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
-from shelf.tables import _metadata_path, build_table
-from shelf.types import StepURI
-from shelf.utils import checksum_file, load_yaml, save_yaml
+from alcove.paths import SNAPSHOT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
+from alcove.tables import _metadata_path, build_table
+from alcove.types import StepURI
+from alcove.utils import checksum_file, load_yaml, save_yaml
 
 
-@pytest.fixture
-def setup_test_environment(tmp_path):
-    # Setup temporary environment for testing
-    os.environ["S3_ACCESS_KEY"] = os.environ.get("TEST_ACCESS_KEY", "justtesting")
-    os.environ["S3_SECRET_KEY"] = os.environ.get("TEST_SECRET_KEY", "justtesting")
-    os.environ["S3_BUCKET_NAME"] = os.environ.get("TEST_BUCKET_NAME", "test")
-    os.environ["S3_ENDPOINT_URL"] = os.environ.get(
-        "TEST_ENDPOINT_URL", "http://localhost:9000"
-    )
-
-    # Create test directory and files
-    test_dir = tmp_path / "test_dir"
-    test_dir.mkdir()
-
-    # Change to test directory
-    os.chdir(test_dir)
-
-    yield test_dir
-
-    # Cleanup
-    shutil.rmtree(test_dir)
+# Fixture now moved to conftest.py
 
 
 def test_generate_without_deps(setup_test_environment):

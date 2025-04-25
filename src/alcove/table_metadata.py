@@ -9,11 +9,11 @@ import jsonschema
 import polars as pl
 from rich.console import Console
 
-from shelf.exceptions import ValidationError
-from shelf.paths import SNAPSHOT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
-from shelf.schemas import TABLE_CONFIG_SCHEMA
-from shelf.types import StepURI
-from shelf.utils import checksum_file, load_yaml, save_yaml
+from alcove.exceptions import ValidationError
+from alcove.paths import SNAPSHOT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
+from alcove.schemas import TABLE_CONFIG_SCHEMA
+from alcove.types import StepURI
+from alcove.utils import checksum_file, load_yaml, save_yaml
 
 console = Console()
 

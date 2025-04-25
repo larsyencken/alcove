@@ -1,6 +1,6 @@
 [project]
-name = "shelf"
-version = "0.1.0"
+name = "alcove"
+version = "0.1.1"
 description = "Add your description here"
 authors = [{ name = "Lars Yencken", email = "lars@yencken.org" }]
 dependencies = [
@@ -17,7 +17,7 @@ readme = "README.md"
 requires-python = ">= 3.12"
 
 [project.scripts]
-shelf = "shelf:main"
+alcove = "alcove:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -31,7 +31,7 @@ dev-dependencies = ["pytest>=8.3.1", "minio>=7.2.7"]
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/shelf"]
+packages = ["src/alcove"]
 
 [tool.uv]
 dev-dependencies = [
@@ -39,4 +39,6 @@ dev-dependencies = [
     "pyright>=1.1.387",
     "pytest>=8.3.3",
     "ruff>=0.7.2",
+    "pytest-docker>=2.0.0",
+    "docker>=7.0.0",
 ]

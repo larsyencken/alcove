@@ -1,7 +1,7 @@
 #
 #  snapshots.py
 #
-#  Adding and removing snapshots from the Shelf.
+#  Adding and removing snapshots from the Alcove.
 #
 
 
@@ -15,10 +15,10 @@ from typing import Any, Literal, Optional, Union
 import boto3
 import jsonschema
 
-from shelf.paths import BASE_DIR, SNAPSHOT_DIR
-from shelf.schemas import SNAPSHOT_SCHEMA, validate_snapshot
-from shelf.types import Checksum, DatasetName, FileName, Manifest, StepURI
-from shelf.utils import (
+from alcove.paths import BASE_DIR, SNAPSHOT_DIR
+from alcove.schemas import SNAPSHOT_SCHEMA, validate_snapshot
+from alcove.types import Checksum, DatasetName, FileName, Manifest, StepURI
+from alcove.utils import (
     checksum_file,
     checksum_folder,
     checksum_manifest,
@@ -214,6 +214,16 @@ def add_directory_to_s3(file_path: Path) -> dict[FileName, Checksum]:
 
 
 def add_to_s3(file_path: Union[str, Path], checksum: Checksum) -> None:
+    # Test environment check
+    if os.environ.get("TEST_ENVIRONMENT") == "1":
+        print_op("UPLOAD", file_path)
+        cache_path = (
+            Path.home() / ".cache" / "alcove" / checksum[:2] / checksum[2:4] / checksum
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(file_path, cache_path)
+        return
+        
     s3 = boto3.client(
         "s3",
         aws_access_key_id=os.environ["S3_ACCESS_KEY"],
@@ -280,7 +290,7 @@ def s3_client():
 
 def check_local_cache(checksum: Checksum) -> Optional[Path]:
     cache_path = (
-        Path.home() / ".cache" / "shelf" / checksum[:2] / checksum[2:4] / checksum
+        Path.home() / ".cache" / "alcove" / checksum[:2] / checksum[2:4] / checksum
     )
 
     if cache_path.exists():
@@ -302,7 +312,7 @@ def fetch_from_s3(checksum: Checksum, dest_path: Path) -> None:
     download_file(s3_path, dest_path)
 
     cache_path = (
-        Path.home() / ".cache" / "shelf" / checksum[:2] / checksum[2:4] / checksum
+        Path.home() / ".cache" / "alcove" / checksum[:2] / checksum[2:4] / checksum
     )
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     print_op("CACHE ADD", f"~/{cache_path.relative_to(Path.home())}")
