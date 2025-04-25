@@ -275,11 +275,13 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
 
 ## Changelog
 
-- `dev` (unreleased)
+- `0.1.2` (2025-04-25)
   - Fixed B2 compatibility with recent boto3 versions by disabling checksum validation (#60)
   - Simplified testing approach by always requiring Docker with MinIO
   - Added PyPI package configuration and installation instructions
   - Improved documentation with quick start guide and command reference
+
+- `dev` (unreleased)
 
 - `0.1.1` (2025-04-25)
   - Renamed project from "shelf" to "alcove"
