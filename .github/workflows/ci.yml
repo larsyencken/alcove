@@ -20,7 +20,6 @@ jobs:
         env:
           MINIO_ACCESS_KEY: justtesting
           MINIO_SECRET_KEY: justtesting
-        options: --name=minio --health-cmd "curl http://localhost:9000/minio/health/live"
 
     steps:
       - name: Checkout code

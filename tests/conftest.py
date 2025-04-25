@@ -13,7 +13,27 @@ def minio_container():
     Raises an exception if Docker is not available or container can't be started.
     
     Uses the DOCKER_HOST environment variable if set to connect to the correct Docker context.
+    
+    Skips container creation if running in GitHub Actions CI environment.
     """
+    # Check if running in GitHub Actions CI
+    is_github_ci = os.environ.get("GITHUB_ACTIONS") == "true"
+    
+    # If in CI, we'll use the GitHub Actions service container instead
+    if is_github_ci:
+        print("Running in GitHub Actions CI - using GitHub-provided MinIO service")
+        # Verify the CI-provided MinIO is available
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.connect(("localhost", 9000))
+            print("CI MinIO service is running and responding")
+            s.close()
+        except Exception as conn_error:
+            pytest.fail(f"CI MinIO service not responding on port 9000: {conn_error}")
+        yield None
+        return
+    
     # Check if we want to force MinIO container to be used
     require_minio = os.environ.get("REQUIRE_MINIO", "1") == "1"
     
@@ -22,29 +42,35 @@ def minio_container():
     if docker_host:
         print(f"Using DOCKER_HOST: {docker_host}")
     
+    # Check for and clean up any existing container with our name
+    container_name = "alcove-minio-test"
+    
     try:
         client = docker.from_env()
         
-        # Check if the container is already running
+        # Try to remove any existing container
         try:
-            container = client.containers.get("alcove-minio-test")
-            # If container exists but is not running, start it
-            if container.status != "running":
-                container.start()
+            old_container = client.containers.get(container_name)
+            if old_container.status == "running":
+                old_container.stop()
+            old_container.remove()
+            print(f"Removed existing container: {container_name}")
         except NotFound:
-            # Create and start a new container
-            container = client.containers.run(
-                "minio/minio",
-                name="alcove-minio-test",
-                command="server /data --console-address :9001",
-                environment={
-                    "MINIO_ROOT_USER": "minioadmin",
-                    "MINIO_ROOT_PASSWORD": "minioadmin",
-                },
-                ports={"9000/tcp": 9000, "9001/tcp": 9001},
-                volumes={"/tmp/minio-data": {"bind": "/data", "mode": "rw"}},
-                detach=True,
-            )
+            pass  # Container doesn't exist, which is fine
+        
+        # Create a new container
+        container = client.containers.run(
+            "minio/minio",
+            name=container_name,
+            command="server /data",
+            environment={
+                "MINIO_ROOT_USER": "justtesting",
+                "MINIO_ROOT_PASSWORD": "justtesting",
+            },
+            ports={"9000/tcp": 9000},
+            volumes={"/tmp/minio-data": {"bind": "/data", "mode": "rw"}},
+            detach=True,
+        )
         
         # Wait for MinIO to be ready
         time.sleep(3)
@@ -54,19 +80,20 @@ def minio_container():
             bucket_container = client.containers.get("alcove-createbucket")
             if bucket_container.status != "exited":
                 bucket_container.remove(force=True)
-                raise NotFound("Container exists but not exited")
         except NotFound:
-            # MinIO mc client doesn't support 'sh -c', use direct commands
-            bucket_container = client.containers.run(
-                "minio/mc",
-                name="alcove-createbucket",
-                entrypoint=["/bin/sh", "-c"],
-                command=["mc config host add myminio http://alcove-minio-test:9000 minioadmin minioadmin && mc mb myminio/test-bucket -p || true"],
-                network_mode="default", 
-                links={"alcove-minio-test": "alcove-minio-test"},
-                detach=False,
-                remove=True,
-            )
+            pass
+            
+        # Create the test bucket
+        bucket_container = client.containers.run(
+            "minio/mc",
+            name="alcove-createbucket",
+            entrypoint=["/bin/sh", "-c"],
+            command=[f"mc config host add myminio http://{container_name}:9000 justtesting justtesting && mc mb myminio/test -p || true"],
+            network_mode="default", 
+            links={container_name: container_name},
+            detach=False,
+            remove=True,
+        )
         
         # Verify MinIO is actually responding
         import socket
@@ -83,10 +110,14 @@ def minio_container():
         
         # Successfully initialized Docker
         print("Using Docker-managed MinIO for testing")
+        
+        # Yield the container for the tests to use
         yield container
         
-        # Don't stop the container after tests - leave it running for faster subsequent test runs
-        # If you want to clean up: container.stop() and container.remove()
+        # Clean up after tests
+        print("Cleaning up MinIO container")
+        container.stop()
+        container.remove()
         
     except Exception as e:
         error_msg = f"Docker or MinIO not available: {str(e)}"
@@ -103,14 +134,16 @@ def setup_test_environment(tmp_path, minio_container):
     """
     Setup test environment with the MinIO container running.
     This replaces the fixtures in test_alcove.py and test_tables.py.
+    
+    Uses the same configuration for both local testing and GitHub CI environment.
     """
     # If MinIO is required but not available, tests will have already failed through the minio_container fixture
     
-    # Setup test environment with fixed S3 credentials for containerized MinIO
+    # Setup test environment with consistent S3 credentials for both local and CI
     os.environ["TEST_ENVIRONMENT"] = "1"  # Enable test mode
-    os.environ["S3_ACCESS_KEY"] = "minioadmin"
-    os.environ["S3_SECRET_KEY"] = "minioadmin"
-    os.environ["S3_BUCKET_NAME"] = "test-bucket"
+    os.environ["S3_ACCESS_KEY"] = "justtesting"
+    os.environ["S3_SECRET_KEY"] = "justtesting"
+    os.environ["S3_BUCKET_NAME"] = "test"
     os.environ["S3_ENDPOINT_URL"] = "http://localhost:9000"
 
     # Create test directory and files
