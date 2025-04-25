@@ -20,19 +20,101 @@ Alcove is an opinionated small-scale ETL framework for managing data files and d
 - **SQL support.** Alcove is a Python framework, but allows you to write steps in SQL which will be executed by DuckDB.
 - **Parquet interchange.** All derived tables are generated as Parquet, which makes reuse easier.
 
+## Quick Start
+
+```bash
+# Install alcove
+pip install alcove  # or: uv add alcove
+
+# Initialize a new alcove
+mkdir my-data-project && cd my-data-project
+alcove init
+
+# Add a data file to your alcove
+alcove snapshot ~/Downloads/countries.csv countries/latest
+
+# Create a derived table
+alcove new-table derived/population.sql countries/latest
+
+# Build all tables
+alcove run
+
+# Explore your data with DuckDB
+alcove db
+```
+
 ## Usage
 
 ### Install the package
 
-Start by installing the alcove package, either globally, or into an existing Python project.
+You can install the `alcove` package from PyPI using pip, uv, or any other Python package manager:
 
-`pip install git+https://github.com/larsyencken/alcove`
+```bash
+# Using pip
+pip install alcove
+
+# Using uv (recommended)
+uv add alcove
+
+# For development
+uv add --dev alcove
+```
+
+You can also install directly from GitHub for the latest development version:
+
+```bash
+pip install git+https://github.com/larsyencken/alcove
+```
+
+### Using Alcove in your project
+
+#### Starting a new project
+
+To start a new project with alcove:
+
+```bash
+# Create and navigate to your project directory
+mkdir my-data-project
+cd my-data-project
+
+# Set up your Python environment (optional, but recommended)
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install alcove
+pip install alcove
+
+# Or with uv
+uv add alcove
+
+# Initialize the alcove
+alcove init
+```
+
+#### Adding to an existing project
+
+To add alcove to an existing project:
+
+```bash
+# Navigate to your project directory
+cd your-project
+
+# Install alcove
+uv add alcove   # Or pip install alcove
+
+# Initialize alcove in a subdirectory (optional)
+mkdir data
+cd data
+alcove init
+```
 
 ### Initialise an alcove
 
-Enter the folder where you want to store your data and metadata, and run:
+From the folder where you want to store your data and metadata, run:
 
-`alcove init`
+```bash
+alcove init
+```
 
 This will create a `alcove.yaml` file, which will serve as the catalogue of all the data in your alcove.
 
@@ -51,9 +133,15 @@ Now your alcove is ready to use.
 
 ### Adding a file or folder
 
-From within your alcove folder, run `alcove snapshot path/to/your/file_or_folder dataset_name` to add a file to your alcove. See the earlier overview for choosing a dataset name.
+From within your alcove folder, use the `snapshot` command to add a file or folder to your alcove:
 
+```bash
+alcove snapshot path/to/your/file_or_folder dataset_name
 ```
+
+For example:
+
+```bash
 alcove snapshot ~/Downloads/countries.csv countries/latest
 ```
 
@@ -63,17 +151,23 @@ The metadata format has some minimum fields, but is meant for you to extend as n
 
 ### Creating a new table
 
-To create a new table, use the `alcove new-table <table-path> [dep1 [dep2 [...]]` command. This command will create a placeholder executable script that generates an example data file of the given type based on the file extension (.parquet or .sql).
+To create a new table, use the `new-table` command:
 
-For example, to create a new table with a Parquet placeholder script:
-
+```bash
+alcove new-table <table-path> [dep1 [dep2 [...]]]
 ```
+
+This creates a placeholder executable script that generates an example data file based on the file extension (.parquet or .sql).
+
+#### Creating a Parquet table
+
+```bash
 alcove new-table path/to/your/table
 ```
 
-This will create a placeholder script that generates an example Parquet file with the following content:
+This creates a placeholder Python script that generates an example Parquet file:
 
-```
+```python
 #!/usr/bin/env python3
 import sys
 import polars as pl
@@ -90,15 +184,15 @@ output_file = sys.argv[-1]
 df.write_parquet(output_file)
 ```
 
-For example, to create a new table with a SQL placeholder script:
+#### Creating a SQL table
 
-```
+```bash
 alcove new-table path/to/your/table.sql
 ```
 
-This will create a placeholder script that generates an example SQL file with the following content:
+This creates a placeholder SQL script:
 
-```
+```sql
 -- SQL script to create a table
 CREATE TABLE example_table AS
 SELECT
@@ -107,9 +201,11 @@ SELECT
     3 AS c
 ```
 
-The command also supports the `--edit` option to open the metadata file for the table in your editor:
+#### Opening in your editor
 
-```
+The command also supports the `--edit` option to open the metadata file in your editor:
+
+```bash
 alcove new-table path/to/your/table --edit
 ```
 
@@ -120,9 +216,26 @@ If a `.sql` step definition is detected, it will be executed using DuckDB with a
 - `{output_file}`: The path to the output file.
 - `{dependency}`: The path of each dependency, simplified to a semantic name.
 
+### Command Reference
+
+Alcove provides the following commands:
+
+- `alcove init` - Initialize a new alcove workspace
+- `alcove snapshot <path> <dataset>` - Add a file or directory to your alcove
+- `alcove run` - Build all tables and fetch outdated data
+- `alcove list` - List all datasets in alphabetical order
+- `alcove audit` - Validate the alcove metadata
+- `alcove new-table <path> [deps...]` - Create a new derived table
+- `alcove db [query]` - Open a DuckDB shell or execute a query
+- `alcove export-duckdb <file>` - Export tables to a DuckDB file
+
 ### Building your alcove
 
-Run `alcove run` to fetch any data that's out of date, and build any derived tables.
+Run the `run` command to fetch any data that's out of date and build any derived tables:
+
+```bash
+alcove run
+```
 
 ## Development
 
@@ -164,7 +277,8 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
 
 - `dev` (unreleased)
   - Simplified testing approach by always requiring Docker with MinIO
-  - Added PyPI package configuration
+  - Added PyPI package configuration and installation instructions
+  - Improved documentation with quick start guide and command reference
 
 - `0.1.1` (2025-04-25)
   - Renamed project from "shelf" to "alcove"
