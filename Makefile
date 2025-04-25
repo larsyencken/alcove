@@ -54,6 +54,7 @@ act:
 
 build:
 	@echo "==> Building package"
+	@rm -rf dist
 	@uv build
 	@uv run twine check dist/*
 
