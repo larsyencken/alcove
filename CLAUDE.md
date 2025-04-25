@@ -1,3 +1,4 @@
 - After each change, run `make test-strict` to check project health (requires Docker)
 - Install packages with `uv add <pkg>` or `uv add --dev <pkg>`
 - Test Github CI runs cleanly with `make act`
+- Avoid modifying the global Python environment or relying on globally installed packages

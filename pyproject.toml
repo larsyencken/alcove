@@ -1,7 +1,7 @@
 [project]
 name = "alcove"
 version = "0.1.1"
-description = "Add your description here"
+description = "An opinionated small-scale ETL framework for managing data files and directories in a content-addressable way."
 authors = [{ name = "Lars Yencken", email = "lars@yencken.org" }]
 dependencies = [
     "boto3>=1.34.145",
@@ -15,6 +15,20 @@ dependencies = [
 ]
 readme = "README.md"
 requires-python = ">= 3.12"
+keywords = ["etl", "data-engineering", "data-lake", "content-addressable"]
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/larsyencken/alcove"
+Repository = "https://github.com/larsyencken/alcove"
+"Bug Tracker" = "https://github.com/larsyencken/alcove/issues"
 
 [project.scripts]
 alcove = "alcove:main"
@@ -27,12 +41,6 @@ build-backend = "hatchling.build"
 managed = true
 dev-dependencies = ["pytest>=8.3.1", "minio>=7.2.7"]
 
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/alcove"]
-
 [tool.uv]
 dev-dependencies = [
     "minio>=7.2.10",
@@ -41,4 +49,6 @@ dev-dependencies = [
     "ruff>=0.7.2",
     "pytest-docker>=2.0.0",
     "docker>=7.0.0",
+    "twine>=6.1.0",
+    "hatchling>=1.27.0",
 ]
