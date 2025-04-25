@@ -14,6 +14,7 @@ from typing import Any, Literal, Optional, Union
 
 import boto3
 import jsonschema
+from botocore.config import Config
 
 from alcove.paths import BASE_DIR, SNAPSHOT_DIR
 from alcove.schemas import SNAPSHOT_SCHEMA, validate_snapshot
@@ -223,13 +224,8 @@ def add_to_s3(file_path: Union[str, Path], checksum: Checksum) -> None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(file_path, cache_path)
         return
-        
-    s3 = boto3.client(
-        "s3",
-        aws_access_key_id=os.environ["S3_ACCESS_KEY"],
-        aws_secret_access_key=os.environ["S3_SECRET_KEY"],
-        endpoint_url=os.environ["S3_ENDPOINT_URL"],
-    )
+
+    s3 = s3_client()
     bucket_name = os.environ["S3_BUCKET_NAME"]
     dest_path = f"{checksum[:2]}/{checksum[2:4]}/{checksum}"
     print_op("UPLOAD", file_path)
@@ -284,6 +280,12 @@ def s3_client():
         aws_access_key_id=os.environ["S3_ACCESS_KEY"],
         aws_secret_access_key=os.environ["S3_SECRET_KEY"],
         endpoint_url=os.environ["S3_ENDPOINT_URL"],
+        # disable outgoing checksum header and skip checksum validation unless enforced
+        # https://github.com/larsyencken/alcove/issues/60
+        config=Config(
+            request_checksum_calculation="when_required",  # ← disable outgoing checksum header
+            response_checksum_validation="when_required",  # ← skip checksum validation unless enforced
+        ),
     )
     return s3
 
