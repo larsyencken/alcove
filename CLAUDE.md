@@ -6,5 +6,6 @@
 - Don't bother with a dev section in the changelog if there are not dev changes outstanding
 - When you bump the version number, and commit that change, be sure to tag the commit as well
 - Create and publish a new release with `make publish`
+- When doing a release, ask me to run `make publish` manually myself -- it requires a token
 - Whenever committing, check for unstaged files first
 - After changing the package version, run `uv sync` and add `uv.lock` before committing
