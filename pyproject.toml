@@ -1,6 +1,6 @@
 [project]
 name = "alcove"
-version = "0.2.0"
+version = "0.2.1"
 description = "An opinionated small-scale ETL framework for managing data files and directories in a content-addressable way."
 authors = [{ name = "Lars Yencken", email = "lars@yencken.org" }]
 dependencies = [
