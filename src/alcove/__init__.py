@@ -190,16 +190,16 @@ def init_alcove_config() -> None:
 
 def init_data_files() -> None:
     """
-    Initialize the .data-files file and ensure it's referenced in .gitignore.
+    Initialize data/.gitignore to handle data files that should not be tracked.
     """
-    from alcove.utils import ensure_data_files_in_gitignore
-    ensure_data_files_in_gitignore()
+    from alcove.utils import ensure_data_gitignore
+    ensure_data_gitignore()
 
 
 def init_alcove() -> None:
     """
     Initialize alcove with the necessary files and directories.
-    Creates the alcove.yaml file, .data-files, and updates .gitignore.
+    Creates the alcove.yaml file and data/.gitignore for ignoring data files.
     """
     # Initialize configuration
     init_alcove_config()
@@ -233,8 +233,8 @@ def snapshot_to_alcove(
     snapshot = Snapshot.create(file_path, dataset_name, existing_metadata)
 
     # ensure that the data itself does not enter git (if not already ignored)
-    from alcove.utils import add_to_data_files
-    add_to_data_files(snapshot.path)
+    from alcove.utils import add_to_data_gitignore
+    add_to_data_gitignore(snapshot.path)
 
     if edit:
         subprocess.run(["vim", snapshot.metadata_path])
@@ -363,53 +363,53 @@ def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
     audit_gitignore_setup(fix)
 
 
-def check_data_files_exists(fix: bool = False) -> None:
+def check_data_gitignore_exists(fix: bool = False) -> None:
     """
-    Check if .data-files exists and create it if it doesn't.
+    Check if data/.gitignore exists and create it if it doesn't.
     
     Args:
         fix: Whether to fix issues that are found
     """
     from alcove.utils import print_op
     
-    data_files = Path(".data-files")
+    data_dir = Path("data")
+    gitignore_path = data_dir / ".gitignore"
     
-    if not data_files.exists():
+    # Make sure data directory exists
+    if not data_dir.exists():
         if fix:
-            print_op("CREATE", ".data-files")
-            data_files.touch()
+            print_op("CREATE", "data/")
+            data_dir.mkdir(parents=True, exist_ok=True)
         else:
-            print("WARNING: .data-files doesn't exist")
+            print("WARNING: data/ directory doesn't exist")
+            return
+    
+    if not gitignore_path.exists():
+        if fix:
+            print_op("CREATE", "data/.gitignore")
+            # Always ignore 'tables/' in data/.gitignore
+            gitignore_path.write_text("tables/\n")
+        else:
+            print("WARNING: data/.gitignore doesn't exist")
 
 
-def check_gitignore_includes_data_files(fix: bool = False) -> None:
+def ensure_data_dir_in_gitignore(fix: bool = False) -> None:
     """
-    Check if .gitignore includes a reference to .data-files.
+    We no longer need to include a reference to .data-files in .gitignore.
+    This is a no-op method retained for backward compatibility.
     
     Args:
         fix: Whether to fix issues that are found
     """
-    from alcove.utils import ensure_data_files_in_gitignore
-    
-    gitignore = Path(".gitignore")
-    
-    if gitignore.exists():
-        with open(gitignore) as f:
-            gitignore_entries = [line.strip() for line in f if line.strip()]
-        
-        if ".data-files" not in gitignore_entries:
-            if fix:
-                ensure_data_files_in_gitignore()
-            else:
-                print("WARNING: .gitignore doesn't include .data-files")
+    # This is intentionally empty - we don't need to do this anymore
 
 
 def find_data_patterns_in_gitignore() -> list[str]:
     """
-    Find data file patterns in .gitignore that should be in .data-files.
+    Find data file patterns in .gitignore that should be in data/.gitignore.
     
     Returns:
-        A list of patterns that should be moved to .data-files
+        A list of patterns that should be moved to data/.gitignore
     """
     gitignore = Path(".gitignore")
     
@@ -422,53 +422,71 @@ def find_data_patterns_in_gitignore() -> list[str]:
     # Look for data file patterns in .gitignore
     data_patterns = []
     for entry in gitignore_entries:
-        if entry == ".data-files":
-            continue
-            
-        if entry.startswith("data/snapshots/"):
+        if entry.startswith("data/"):
             data_patterns.append(entry)
     
     return data_patterns
 
 
-def migrate_data_patterns_to_data_files(fix: bool = False) -> None:
+def migrate_data_patterns_to_data_gitignore(fix: bool = False) -> None:
     """
-    Move data file patterns from .gitignore to .data-files.
+    Move data file patterns from .gitignore to data/.gitignore.
     
     Args:
         fix: Whether to fix issues that are found
     """
+    from alcove.utils import print_op
+    
     gitignore = Path(".gitignore")
-    data_files = Path(".data-files")
+    data_dir = Path("data")
     
     # Find data patterns in .gitignore
     data_patterns = find_data_patterns_in_gitignore()
     
     if data_patterns:
         if fix:
-            print(f"Moving {len(data_patterns)} entries from .gitignore to .data-files")
+            print(f"Moving {len(data_patterns)} entries from .gitignore to data/.gitignore")
             
-            # Read existing .data-files content
-            if data_files.exists():
-                with open(data_files) as f:
-                    data_files_entries = set(line.strip() for line in f if line.strip())
+            # Create data directory if it doesn't exist
+            if not data_dir.exists():
+                data_dir.mkdir(parents=True, exist_ok=True)
+                print_op("CREATE", "data/")
+            
+            # Check for existing data/.gitignore
+            data_gitignore = data_dir / ".gitignore"
+            if data_gitignore.exists():
+                with open(data_gitignore) as f:
+                    data_gitignore_entries = set(line.strip() for line in f if line.strip())
             else:
-                data_files_entries = set()
+                data_gitignore_entries = set()
+                # Always ensure "tables/" is included
+                data_gitignore_entries.add("tables/")
             
-            # Add new entries to .data-files
-            with data_files.open("a") as f:
-                for pattern in data_patterns:
-                    if pattern not in data_files_entries:
-                        print(pattern, file=f)
+            # First get list of all entries, preserving previous entries
+            all_entries = set(["tables/"])  # Always include tables/
+            for entry in data_gitignore_entries:
+                if entry != "tables/":
+                    all_entries.add(entry)
+                    
+            # Add migrated entries from .gitignore
+            for pattern in data_patterns:
+                if pattern.startswith("data/"):
+                    pattern_without_prefix = pattern[5:]  # Remove "data/" prefix
+                    if pattern_without_prefix != "tables/":
+                        all_entries.add(pattern_without_prefix)
+            
+            # Add new entries to data/.gitignore, removing the "data/" prefix
+            with data_gitignore.open("w") as f:
+                # Write all entries in sorted order
+                for entry in sorted(all_entries):
+                    print(entry, file=f)
             
             # Read gitignore entries again to make sure we have the latest
             with open(gitignore) as f:
                 gitignore_entries = [line.strip() for line in f if line.strip()]
             
             # Create new contents for .gitignore with data patterns removed
-            new_gitignore_entries = [
-                ".data-files"  # Always include this
-            ]
+            new_gitignore_entries = []
             
             for entry in gitignore_entries:
                 if entry not in data_patterns and entry != ".data-files":
@@ -479,28 +497,80 @@ def migrate_data_patterns_to_data_files(fix: bool = False) -> None:
                 for entry in new_gitignore_entries:
                     print(entry, file=f)
         else:
-            print(f"WARNING: Found {len(data_patterns)} data file patterns in .gitignore that should be in .data-files")
+            print(f"WARNING: Found {len(data_patterns)} data file patterns in .gitignore that should be in data/.gitignore")
 
 
 def audit_gitignore_setup(fix: bool = False) -> None:
     """
-    Audit the .gitignore and .data-files setup.
+    Audit the .gitignore and data/.gitignore setup.
     
     Checks for:
-    - .gitignore includes .data-files
-    - No data file patterns in .gitignore that should be in .data-files
+    - data/.gitignore exists and includes tables/
+    - No data file patterns in .gitignore that should be in data/.gitignore
     
     Args:
         fix: Whether to fix issues that are found
     """
-    # Check if .data-files exists
-    check_data_files_exists(fix)
+    from alcove.utils import print_op
     
-    # Check if .gitignore includes .data-files
-    check_gitignore_includes_data_files(fix)
+    # Check if data/.gitignore exists
+    check_data_gitignore_exists(fix)
     
-    # Move data patterns from .gitignore to .data-files
-    migrate_data_patterns_to_data_files(fix)
+    # Move data patterns from .gitignore to data/.gitignore
+    migrate_data_patterns_to_data_gitignore(fix)
+    
+    # If .data-files exists, also migrate its contents to data/.gitignore
+    old_data_files = Path(".data-files")
+    if old_data_files.exists():
+        if fix:
+            print("Migrating .data-files to data/.gitignore")
+            data_dir = Path("data")
+            data_gitignore = data_dir / ".gitignore"
+            
+            # Create data directory if it doesn't exist
+            if not data_dir.exists():
+                data_dir.mkdir(parents=True, exist_ok=True)
+                print_op("CREATE", "data/")
+            
+            # Read existing data/.gitignore content
+            if data_gitignore.exists():
+                with open(data_gitignore) as f:
+                    data_gitignore_entries = set(line.strip() for line in f if line.strip())
+            else:
+                data_gitignore_entries = set()
+                # Always ensure "tables/" is included
+                data_gitignore_entries.add("tables/")
+            
+            # Read entries from .data-files
+            with open(old_data_files) as f:
+                data_files_entries = [line.strip() for line in f if line.strip()]
+            
+            # First get list of all entries, preserving previous entries too
+            all_entries = set(["tables/"])  # Always include tables/
+            for entry in data_gitignore_entries:
+                if entry != "tables/":
+                    all_entries.add(entry)
+                    
+            # Add migrated entries from .data-files
+            for entry in data_files_entries:
+                if entry.startswith("data/"):
+                    entry_without_prefix = entry[5:]  # Remove "data/" prefix
+                    if entry_without_prefix != "tables/":
+                        all_entries.add(entry_without_prefix)
+                elif entry != "tables/":
+                    all_entries.add(entry)
+            
+            # Write data/.gitignore with all entries
+            with data_gitignore.open("w") as f:
+                # Write all entries in sorted order
+                for entry in sorted(all_entries):
+                    print(entry, file=f)
+            
+            # Remove the old .data-files file
+            old_data_files.unlink()
+            print_op("REMOVE", ".data-files")
+        else:
+            print("WARNING: .data-files exists and should be migrated to data/.gitignore")
 
 
 def audit_step(step: StepURI, fix: bool = False) -> None:

@@ -77,54 +77,64 @@ def add_entry_to_file(file_path: Path, entry: str) -> None:
         print(entry, file=f)
 
 
-def ensure_data_files_in_gitignore() -> None:
+def ensure_data_gitignore() -> None:
     """
-    Ensure that .gitignore includes a reference to .data-files.
-    Creates both files if they don't exist.
+    Ensure that data/.gitignore exists with the tables/ entry.
+    Creates the file if it doesn't exist.
     """
-    gitignore = Path(".gitignore")
-    data_files = Path(".data-files")
+    data_dir = Path("data")
+    data_gitignore = data_dir / ".gitignore"
     
-    # Create empty .data-files if it doesn't exist
-    if not data_files.exists():
-        data_files.touch()
-        print_op("CREATE", ".data-files")
+    # Create data directory if it doesn't exist
+    if not data_dir.exists():
+        data_dir.mkdir(parents=True, exist_ok=True)
+        print_op("CREATE", "data/")
     
-    # Add .data-files reference to .gitignore
-    add_entry_to_file(gitignore, ".data-files")
+    # Create data/.gitignore if it doesn't exist with the tables/ entry
+    if not data_gitignore.exists():
+        data_gitignore.write_text("tables/\n")
+        print_op("CREATE", "data/.gitignore")
+    else:
+        # Make sure tables/ is in data/.gitignore
+        with open(data_gitignore) as f:
+            entries = set(line.strip() for line in f if line.strip())
+        
+        if "tables/" not in entries:
+            add_entry_to_file(data_gitignore, "tables/")
 
 
-def add_to_data_files(path: Path) -> None:
+def add_to_data_gitignore(path: Path) -> None:
     """
-    Add a path to the .data-files file, creating it if it doesn't exist.
-    Also ensure .gitignore includes .data-files.
+    Add a path to the data/.gitignore file, creating it if it doesn't exist.
     
     Args:
-        path: The path to add to .data-files
+        path: The path to add to data/.gitignore
     """
-    data_files = Path(".data-files")
+    data_dir = Path("data")
+    data_gitignore = data_dir / ".gitignore"
     path_str = str(path.relative_to(BASE_DIR))
-
-    # First ensure .data-files is included in .gitignore
-    ensure_data_files_in_gitignore()
-
-    # Then add the path to .data-files
-    add_entry_to_file(data_files, path_str)
+    
+    # First ensure data/.gitignore exists
+    ensure_data_gitignore()
+    
+    # If path starts with "data/", remove that prefix
+    if path_str.startswith("data/"):
+        path_str = path_str[5:]  # Remove "data/" prefix
+    
+    # Then add the path to data/.gitignore
+    add_entry_to_file(data_gitignore, path_str)
 
 
 def add_to_gitignore(path: Path) -> None:
     """
     Legacy function to add a path directly to .gitignore.
-    This will be phased out in favor of add_to_data_files.
+    This will be phased out in favor of add_to_data_gitignore.
     
     Args:
         path: The path to add to .gitignore
     """
-    gitignore = Path(".gitignore")
-    path_str = str(path.relative_to(BASE_DIR))
-
-    # Add the path to .gitignore
-    add_entry_to_file(gitignore, path_str)
+    # Instead of adding to .gitignore, add to data/.gitignore
+    add_to_data_gitignore(path)
 
 
 def dump_yaml_with_comments(obj: dict, f) -> None:
