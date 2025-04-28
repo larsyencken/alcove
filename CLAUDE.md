@@ -7,3 +7,4 @@
 - When you bump the version number, and commit that change, be sure to tag the commit as well
 - Create and publish a new release with `make publish`
 - Whenever committing, check for unstaged files first
+- After changing the package version, run `uv sync` and add `uv.lock` before committing
