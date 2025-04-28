@@ -16,7 +16,7 @@ from alcove.core import Alcove
 from alcove.exceptions import StepDefinitionError
 from alcove.snapshots import Snapshot
 from alcove.types import StepURI
-from alcove.utils import add_to_gitignore, checksum_manifest, console
+from alcove.utils import checksum_manifest, console
 
 load_dotenv()
 
@@ -181,8 +181,23 @@ def main():
 
 
 def init_alcove() -> None:
+    """
+    Initialize alcove with the necessary files and directories.
+    Creates the alcove.yaml file, .data-files, and updates .gitignore.
+    """
     print("Initializing alcove")
     Alcove.init()
+    
+    # Create empty .data-files file if it doesn't exist
+    data_files = Path(".data-files")
+    if not data_files.exists():
+        data_files.touch()
+        from alcove.utils import print_op
+        print_op("CREATE", ".data-files")
+    
+    # Make sure .gitignore includes .data-files
+    from alcove.utils import ensure_data_files_in_gitignore
+    ensure_data_files_in_gitignore()
 
 
 def snapshot_to_alcove(
@@ -210,7 +225,8 @@ def snapshot_to_alcove(
     snapshot = Snapshot.create(file_path, dataset_name, existing_metadata)
 
     # ensure that the data itself does not enter git (if not already ignored)
-    add_to_gitignore(snapshot.path)
+    from alcove.utils import add_to_data_files
+    add_to_data_files(snapshot.path)
 
     if edit:
         subprocess.run(["vim", snapshot.metadata_path])
@@ -313,12 +329,103 @@ def export_duckdb(alcove: Alcove, db_file: str, short: bool = False) -> None:
 
 
 def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
+    """
+    Audit the alcove repository for problems and inconsistencies.
+    Can optionally fix issues that are found.
+    
+    Checks for:
+    - Manifest checksum correctness
+    - .gitignore includes .data-files reference
+    - Data files are properly tracked in .data-files instead of .gitignore
+    
+    Args:
+        alcove: The Alcove instance to audit
+        fix: Whether to fix issues that are found
+    """
     # XXX in the future, we could automatically upgrade from one alcove format
     #     version to another, if there were breaking changes
     print(f"Auditing {len(alcove.steps)} steps")
+    
+    # Check all steps
     for step in alcove.steps:
         audit_step(step, fix)
         console.print(f"[blue]{'OK':>5}[/blue]   {step}")
+    
+    # Check .gitignore and .data-files setup
+    audit_gitignore_setup(fix)
+
+
+def audit_gitignore_setup(fix: bool = False) -> None:
+    """
+    Audit the .gitignore and .data-files setup.
+    
+    Checks for:
+    - .gitignore includes .data-files
+    - No data file patterns in .gitignore that should be in .data-files
+    
+    Args:
+        fix: Whether to fix issues that are found
+    """
+    from alcove.utils import ensure_data_files_in_gitignore, print_op
+    
+    gitignore = Path(".gitignore")
+    data_files = Path(".data-files")
+    
+    # Check if .data-files exists
+    if not data_files.exists():
+        if fix:
+            print_op("CREATE", ".data-files")
+            data_files.touch()
+        else:
+            print("WARNING: .data-files doesn't exist")
+    
+    # Ensure .gitignore includes .data-files
+    if gitignore.exists():
+        with open(gitignore) as f:
+            gitignore_entries = [line.strip() for line in f if line.strip()]
+        
+        if ".data-files" not in gitignore_entries:
+            if fix:
+                ensure_data_files_in_gitignore()
+            else:
+                print("WARNING: .gitignore doesn't include .data-files")
+        
+        # Look for data file patterns in .gitignore that should be in .data-files
+        data_patterns = []
+        for entry in gitignore_entries:
+            if entry == ".data-files":
+                continue
+                
+            if entry.startswith("data/snapshots/"):
+                data_patterns.append(entry)
+        
+        if data_patterns:
+            if fix:
+                print(f"Moving {len(data_patterns)} entries from .gitignore to .data-files")
+                
+                # Read existing .data-files content
+                if data_files.exists():
+                    with open(data_files) as f:
+                        data_files_entries = set(line.strip() for line in f if line.strip())
+                else:
+                    data_files_entries = set()
+                
+                # Add new entries to .data-files
+                with data_files.open("a") as f:
+                    for pattern in data_patterns:
+                        if pattern not in data_files_entries:
+                            print(pattern, file=f)
+                
+                # Remove entries from .gitignore and ensure .data-files is included
+                with gitignore.open("w") as f:
+                    if ".data-files" not in gitignore_entries:
+                        print(".data-files", file=f)
+                        
+                    for entry in gitignore_entries:
+                        if entry not in data_patterns and entry != ".data-files":
+                            print(entry, file=f)
+            else:
+                print(f"WARNING: Found {len(data_patterns)} data file patterns in .gitignore that should be in .data-files")
 
 
 def audit_step(step: StepURI, fix: bool = False) -> None:
