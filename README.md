@@ -275,6 +275,11 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
 
 ## Changelog
 
+- `dev`
+  - Fixed gitignore handling by using `data/.gitignore` instead of `.data-files`
+  - Always include `tables/` in `data/.gitignore`
+  - `alcove audit --fix` now migrates patterns from `.gitignore` and `.data-files` to `data/.gitignore`
+
 - `0.2.0` (2025-04-28)
   - Added `.data-files` file for managing alcove data ignores (#61)
   - `alcove init` now creates empty `.data-files` and ensures it's in `.gitignore`
