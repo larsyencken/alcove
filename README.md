@@ -282,6 +282,10 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
   - Improved documentation with quick start guide and command reference
 
 - `dev` (unreleased)
+  - Added `.data-files` file for managing alcove data ignores (#61)
+  - `alcove init` now creates empty `.data-files` and ensures it's in `.gitignore`
+  - `alcove audit --fix` can move patterns from `.gitignore` to `.data-files`
+  - Prevents `.gitignore` from changing frequently with data file updates
 
 - `0.1.1` (2025-04-25)
   - Renamed project from "shelf" to "alcove"
