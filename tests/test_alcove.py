@@ -55,6 +55,7 @@ def test_add_file(setup_test_environment):
         / "2024-07-26.meta.yaml"
     )
     gitignore_file = tmp_path / ".gitignore"
+    data_files_file = tmp_path / ".data-files"
     shelf_yaml_file = tmp_path / "alcove.yaml"
 
     # create dummy file
@@ -69,9 +70,12 @@ def test_add_file(setup_test_environment):
     assert data_file.exists()
     assert metadata_file.exists()
 
-    # check if data path is added to .gitignore
+    # check if data path is added to .data-files and .gitignore includes .data-files
     assert gitignore_file.exists()
+    assert data_files_file.exists()
     with open(gitignore_file, "r") as f:
+        assert ".data-files" in f.read()
+    with open(data_files_file, "r") as f:
         assert f"data/snapshots/{uri.path}.txt\n" in f.read()
 
     # check if dataset name is added to shelf.yaml under steps
@@ -111,6 +115,7 @@ def test_shelve_directory(setup_test_environment):
     data_path = tmp_path / "data/snapshots/" / path
     metadata_file = (tmp_path / "data/snapshots" / path).with_suffix(".meta.yaml")
     gitignore_file = tmp_path / ".gitignore"
+    data_files_file = tmp_path / ".data-files"
     shelf_yaml_file = tmp_path / "alcove.yaml"
 
     # create dummy data
@@ -131,9 +136,12 @@ def test_shelve_directory(setup_test_environment):
     metadata = load_yaml(metadata_file)
     assert metadata.get("manifest")
 
-    # check if data path is added to .gitignore
+    # check if data path is added to .data-files and .gitignore includes .data-files
     assert gitignore_file.exists()
+    assert data_files_file.exists()
     with open(gitignore_file, "r") as f:
+        assert ".data-files" in f.read()
+    with open(data_files_file, "r") as f:
         assert f"{path}\n" in f.read()
 
     # check if dataset name is added to shelf.yaml under steps

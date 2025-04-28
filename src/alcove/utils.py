@@ -53,24 +53,78 @@ def print_op(type_: str, message: Any) -> None:
     console.print(f"[blue]{type_:>15}[/blue]   {message}")
 
 
+def add_entry_to_file(file_path: Path, entry: str) -> None:
+    """
+    Add an entry to a file if it doesn't already exist.
+    
+    Args:
+        file_path: The path to the file to add the entry to
+        entry: The string to add to the file
+    """
+    if file_path.exists():
+        with open(file_path) as f:
+            entries = set(line.strip() for line in f if line.strip())
+
+        if entry in entries:
+            # Entry already exists, nothing to do
+            return
+
+        print_op("UPDATE", str(file_path.name))
+    else:
+        print_op("CREATE", str(file_path.name))
+
+    with file_path.open("a") as f:
+        print(entry, file=f)
+
+
+def ensure_data_files_in_gitignore() -> None:
+    """
+    Ensure that .gitignore includes a reference to .data-files.
+    Creates both files if they don't exist.
+    """
+    gitignore = Path(".gitignore")
+    data_files = Path(".data-files")
+    
+    # Create empty .data-files if it doesn't exist
+    if not data_files.exists():
+        data_files.touch()
+        print_op("CREATE", ".data-files")
+    
+    # Add .data-files reference to .gitignore
+    add_entry_to_file(gitignore, ".data-files")
+
+
+def add_to_data_files(path: Path) -> None:
+    """
+    Add a path to the .data-files file, creating it if it doesn't exist.
+    Also ensure .gitignore includes .data-files.
+    
+    Args:
+        path: The path to add to .data-files
+    """
+    data_files = Path(".data-files")
+    path_str = str(path.relative_to(BASE_DIR))
+
+    # First ensure .data-files is included in .gitignore
+    ensure_data_files_in_gitignore()
+
+    # Then add the path to .data-files
+    add_entry_to_file(data_files, path_str)
+
+
 def add_to_gitignore(path: Path) -> None:
+    """
+    Legacy function to add a path directly to .gitignore.
+    This will be phased out in favor of add_to_data_files.
+    
+    Args:
+        path: The path to add to .gitignore
+    """
     gitignore = Path(".gitignore")
     path_str = str(path.relative_to(BASE_DIR))
 
-    if gitignore.exists():
-        with open(gitignore) as f:
-            entries = set(line.strip() for line in f if line.strip())
-
-        if path_str in entries:
-            # it's already here
-            return
-
-        print_op("UPDATE", ".gitignore")
-    else:
-        print_op("CREATE", ".gitignore")
-
-    with gitignore.open("a") as f:
-        print(path_str, file=f)
+    # Add the path to .gitignore
+    add_entry_to_file(gitignore, path_str)
 
 
 def dump_yaml_with_comments(obj: dict, f) -> None:
