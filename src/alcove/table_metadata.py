@@ -204,6 +204,7 @@ def process_table_metadata(
     save_yaml(final_metadata, _metadata_path(uri))
 
 
+# pyrefly: ignore  # bad-return
 def _get_executable(uri: StepURI, check: bool = True) -> Path:
     base = TABLE_SCRIPT_DIR / uri.path
 

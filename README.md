@@ -253,6 +253,7 @@ All tests require Docker with MinIO container to be available.
 ### Docker Context Support
 
 The testing framework automatically detects your current Docker context and uses it for container operations. This ensures tests work properly with:
+
 - Docker Desktop
 - Colima
 - OrbStack
@@ -261,6 +262,7 @@ The testing framework automatically detects your current Docker context and uses
 ### MinIO Configuration
 
 With Docker, these credentials are automatically used:
+
 - Access Key: minioadmin
 - Secret Key: minioadmin
 - Bucket: test-bucket
@@ -275,24 +277,32 @@ Please report any issues at: https://github.com/larsyencken/alcove/issues
 
 ## Changelog
 
+- `dev`
+
+  - Migrated from `pyright` to `pyrefly` for type checking
+
 - `0.2.1` (2025-04-28)
+
   - Fixed gitignore handling by using `data/.gitignore` instead of `.data-files`
-  - Always include `tables/` in `data/.gitignore` 
+  - Always include `tables/` in `data/.gitignore`
   - `alcove audit --fix` now migrates patterns from `.gitignore` and `.data-files` to `data/.gitignore`
 
 - `0.2.0` (2025-04-28)
+
   - Added `.data-files` file for managing alcove data ignores (#61)
   - `alcove init` now creates empty `.data-files` and ensures it's in `.gitignore`
   - `alcove audit --fix` can move patterns from `.gitignore` to `.data-files`
   - Prevents `.gitignore` from changing frequently with data file updates
 
 - `0.1.2` (2025-04-25)
+
   - Fixed B2 compatibility with recent boto3 versions by disabling checksum validation (#60)
   - Simplified testing approach by always requiring Docker with MinIO
   - Added PyPI package configuration and installation instructions
   - Improved documentation with quick start guide and command reference
 
 - `0.1.1` (2025-04-25)
+
   - Renamed project from "shelf" to "alcove"
   - Added automated Docker container management for testing with MinIO
   - Enhanced Docker context support for different environments (Docker Desktop, Colima, OrbStack)

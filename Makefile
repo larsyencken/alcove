@@ -32,7 +32,7 @@ lint: .venv
 # Typecheck with pyright
 typecheck: .venv
 	@echo "==> Typechecking"
-	@uv run pyright
+	@uv run pyrefly check
 
 # Run all tests with Docker-based MinIO
 test: lint typecheck

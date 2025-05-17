@@ -44,11 +44,15 @@ dev-dependencies = ["pytest>=8.3.1", "minio>=7.2.7"]
 [tool.uv]
 dev-dependencies = [
     "minio>=7.2.10",
-    "pyright>=1.1.387",
     "pytest>=8.3.3",
     "ruff>=0.7.2",
     "pytest-docker>=2.0.0",
     "docker>=7.0.0",
     "twine>=6.1.0",
     "hatchling>=1.27.0",
+    "pyrefly>=0.15.2",
 ]
+
+[tool.pyrefly]
+project_includes = ["**/*"]
+project_excludes = ["**/.[!/.]*", "**/*venv/**/*"]

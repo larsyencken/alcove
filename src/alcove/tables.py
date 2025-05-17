@@ -13,7 +13,11 @@ from alcove.exceptions import ValidationError
 from alcove.paths import TABLE_DIR
 from alcove.schemas import TABLE_SCHEMA
 from alcove.snapshots import Snapshot
-from alcove.table_metadata import _get_executable, _metadata_path, process_table_metadata
+from alcove.table_metadata import (
+    _get_executable,
+    _metadata_path,
+    process_table_metadata,
+)
 from alcove.types import Manifest, StepURI
 from alcove.utils import checksum_file, load_yaml, print_op, save_yaml
 
@@ -97,9 +101,11 @@ def _execute_table_build(
     finally:
         end_time = datetime.now()
         runtime_info["end_time"] = end_time.isoformat()
+        # pyrefly: ignore  # no-matching-overload
         runtime_info["duration_seconds"] = round(
             (end_time - start_time).total_seconds(),
-            2,  # type: ignore
+            # pyrefly: ignore  # bad-argument-type
+            2,
         )
 
     return runtime_info
@@ -217,9 +223,11 @@ def _simplify_dependency_names(deps: list[Path]) -> dict[str, Path]:
         if duplicates == last_duplicates:
             raise Exception(f"infinite loop resolving dependencies: {deps}")
 
+        # pyrefly: ignore  # missing-attribute
         for d, name in list(frontier.items()):
             if d not in duplicates:
                 mapping[name] = d
+                # pyrefly: ignore  # missing-attribute
                 del frontier[d]
 
     return mapping
