@@ -67,9 +67,11 @@ class Snapshot:
         "Load an existing snapshot from its metadata file."
         metadata_file = (SNAPSHOT_DIR / path).with_suffix(".meta.yaml")
 
-        metadata = load_yaml(metadata_file)
+        metadata: dict[str, Any] = load_yaml(metadata_file)
+
         if "date_accessed" in metadata:
             metadata["date_accessed"] = str(metadata["date_accessed"])
+
         jsonschema.validate(metadata, SNAPSHOT_SCHEMA)
 
         metadata["uri"] = StepURI.parse(metadata["uri"])
@@ -140,6 +142,7 @@ class Snapshot:
         save_yaml(record, self.metadata_path, include_comments=comments)
 
     def to_dict(self) -> dict:
+        # pyrefly: ignore  # asdict is in python3.12 but not earlier pythons
         record = asdict(self)
         record["uri"] = str(self.uri)
         # Include all fields, even if they are None

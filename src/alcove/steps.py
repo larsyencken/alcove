@@ -13,6 +13,7 @@ def prune_with_regex(dag: Dag, regex: str, descendents: bool = True) -> Dag:
     step_to_downstream = {}
     for step, deps in dag.items():
         for dep in deps:
+            # pyrefly: ignore  # missing-attribute
             step_to_downstream.setdefault(dep, []).append(step)
 
     queue = []
