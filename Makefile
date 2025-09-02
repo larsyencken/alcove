@@ -12,25 +12,19 @@ help:
 	@echo "  make build          - Build package for distribution"
 	@echo "  make publish        - Publish package to PyPI"
 
-# Check if .venv exists and is up to date
-.venv: pyproject.toml
-	@echo "==> Installing packages"
-	@uv sync
-	@touch $@
-
 # Reformat using ruff
-format: .venv
+format:
 	@echo "==> Formatting all files"
 	@uv run ruff format
 	@uv run ruff check --fix
 
 # Lint using ruff
-lint: .venv
+lint:
 	@echo "==> Linting all files"
 	@uv run ruff check
 
 # Typecheck with pyright
-typecheck: .venv
+typecheck:
 	@echo "==> Typechecking"
 	@uv run pyright
 
