@@ -605,12 +605,48 @@ def audit_step(step: StepURI, fix: bool = False) -> None:
 def new_table(
     alcove: Alcove, table_path: str, dependencies: list[str], edit: bool = False
 ) -> None:
+    from alcove.tables import add_placeholder_metadata, add_placeholder_script
+
     table_uri = StepURI("table", table_path)
     if table_uri in alcove.steps:
         raise ValueError(f"Table already exists in alcove: {table_uri}")
 
-    alcove.steps[table_uri] = [StepURI.parse(dep) for dep in dependencies]
+    # Parse and validate dependencies
+    dep_uris = []
+    for dep in dependencies:
+        dep_uri = StepURI.parse(dep)
+        # Validate that the dependency exists in alcove.yaml
+        if dep_uri not in alcove.steps:
+            raise ValueError(
+                f"Dependency {dep_uri} does not exist in alcove.yaml. "
+                f"Add it first with 'alcove snapshot' or 'alcove new-table'."
+            )
+        dep_uris.append(dep_uri)
+
+    # Add to alcove.yaml
+    alcove.steps[table_uri] = dep_uris
     alcove.save()
+
+    # Create placeholder script (only if it doesn't exist)
+    script_path = add_placeholder_script(table_uri, dep_uris)
+    console.print(f"✓ Script: {script_path}")
+
+    # Create placeholder metadata (only if it doesn't exist)
+    meta_path = add_placeholder_metadata(table_uri, dep_uris)
+    console.print(f"✓ Metadata: {meta_path}")
+
+    # Open script in editor if requested
+    if edit:
+        editor = os.environ.get("EDITOR", "vim")
+        try:
+            subprocess.run([editor, str(script_path)], check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            console.print(f"[yellow]Warning: Could not open editor: {e}[/yellow]")
+
+    console.print(f"✓ Added table {table_uri} to alcove.yaml")
+    console.print("\nNext steps:")
+    console.print(f"  1. Edit {script_path}")
+    console.print(f"  2. Run: alcove run {table_uri.path}")
 
 
 def execute_query(

@@ -575,3 +575,121 @@ def test_table_aliases_version_conflict():
         ("c_20240726", "a_b_c_20240726"),
         ("c_20241003", "a_b_c_20241003"),
     ]
+
+
+def test_add_placeholder_python_script():
+    """Test that add_placeholder_script creates a Python script with correct template."""
+    from alcove.tables import add_placeholder_script
+
+    uri = StepURI("table", "test/example")
+    deps = [StepURI("snapshot", "countries/latest")]
+
+    script_path = add_placeholder_script(uri, deps)
+
+    assert script_path.exists()
+    assert script_path.suffix == ".py"
+    content = script_path.read_text()
+    assert "#!/usr/bin/env python3" in content
+    assert "import polars as pl" in content
+    assert "dim_id" in content  # Check for dimension column requirement
+    assert "# countries_df = pl.read_parquet(sys.argv[1])" in content  # Check dependency hint
+    assert "output_file = sys.argv[-1]" in content
+
+    # Clean up
+    script_path.unlink()
+
+
+def test_add_placeholder_sql_script():
+    """Test that add_placeholder_script creates an SQL script with correct template."""
+    from alcove.tables import add_placeholder_script
+
+    uri = StepURI("table", "test/example.sql")
+    deps = [StepURI("snapshot", "countries/2024-01-15")]
+
+    script_path = add_placeholder_script(uri, deps)
+
+    assert script_path.exists()
+    assert script_path.suffix == ".sql"
+    content = script_path.read_text()
+    assert "-- SQL table definition" in content
+    assert "dim_id" in content  # Check for dimension column requirement
+    assert "{countries}" in content  # Check dependency variable
+    assert "snapshot://countries/2024-01-15" in content  # Check dependency comment
+
+    # Clean up
+    script_path.unlink()
+
+
+def test_add_placeholder_script_no_dependencies():
+    """Test placeholder script creation without dependencies."""
+    from alcove.tables import add_placeholder_script
+
+    uri = StepURI("table", "test/standalone")
+    script_path = add_placeholder_script(uri, [])
+
+    assert script_path.exists()
+    content = script_path.read_text()
+    assert "dim_id" in content
+    # Should not have dependency loading hints
+    assert "pl.read_parquet(sys.argv[1])" not in content
+
+    # Clean up
+    script_path.unlink()
+
+
+def test_add_placeholder_script_already_exists():
+    """Test that add_placeholder_script doesn't overwrite existing scripts."""
+    from alcove.tables import add_placeholder_script
+
+    uri = StepURI("table", "test/existing")
+    script_path = add_placeholder_script(uri, [])
+    original_content = script_path.read_text()
+
+    # Try to create again
+    script_path2 = add_placeholder_script(uri, [])
+    assert script_path == script_path2
+    assert script_path.read_text() == original_content
+
+    # Clean up
+    script_path.unlink()
+
+
+def test_add_placeholder_metadata():
+    """Test that add_placeholder_metadata creates a .meta.yaml file."""
+    from alcove.tables import add_placeholder_metadata
+
+    uri = StepURI("table", "test/example")
+    deps = [StepURI("snapshot", "countries/latest")]
+
+    meta_path = add_placeholder_metadata(uri, deps)
+
+    assert meta_path.exists()
+    assert meta_path.name.endswith(".meta.yaml")
+    content = meta_path.read_text()
+    assert "inherit:" in content
+    assert "countries/latest" in content
+    assert "validation:" in content
+
+    # Clean up
+    meta_path.unlink()
+
+
+def test_add_placeholder_metadata_multiple_deps():
+    """Test metadata template with multiple dependencies."""
+    from alcove.tables import add_placeholder_metadata
+
+    uri = StepURI("table", "test/multi")
+    deps = [
+        StepURI("snapshot", "countries/latest"),
+        StepURI("snapshot", "cities/latest"),
+    ]
+
+    meta_path = add_placeholder_metadata(uri, deps)
+
+    assert meta_path.exists()
+    content = meta_path.read_text()
+    # With multiple deps, inheritance should be commented out
+    assert "# inherit:" in content
+
+    # Clean up
+    meta_path.unlink()
