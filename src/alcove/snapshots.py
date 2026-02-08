@@ -251,7 +251,11 @@ def copy_dir(local_path: Path, data_path: Path) -> None:
 
     data_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print_op("ADD", f"{data_path.relative_to(BASE_DIR)}/")
+    if data_path.exists():
+        shutil.rmtree(data_path)
+        print_op("REPLACE", f"{data_path.relative_to(BASE_DIR)}/")
+    else:
+        print_op("ADD", f"{data_path.relative_to(BASE_DIR)}/")
     shutil.copytree(local_path, data_path)
 
 

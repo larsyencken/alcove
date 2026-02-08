@@ -3,7 +3,6 @@ import os
 import re
 import subprocess
 import tempfile
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -13,6 +12,14 @@ from dotenv import load_dotenv
 
 from alcove import steps
 from alcove.core import Alcove
+from alcove.db import (
+    AlcoveDB as AlcoveDB,
+    connect as connect,
+    _get_tables,
+    _path_to_snake,
+    _table_aliases,
+    _better_alias,
+)
 from alcove.exceptions import StepDefinitionError
 from alcove.snapshots import Snapshot
 from alcove.types import StepURI
@@ -93,7 +100,8 @@ def main():
     )
 
     audit_parser = subparsers.add_parser(
-        "audit", help="Audit the alcove metadata and validate the metadata of every step"
+        "audit",
+        help="Audit the alcove metadata and validate the metadata of every step",
     )
     audit_parser.add_argument(
         "--fix",
@@ -193,6 +201,7 @@ def init_data_files() -> None:
     Initialize data/.gitignore to handle data files that should not be tracked.
     """
     from alcove.utils import ensure_data_gitignore
+
     ensure_data_gitignore()
 
 
@@ -203,7 +212,7 @@ def init_alcove() -> None:
     """
     # Initialize configuration
     init_alcove_config()
-    
+
     # Initialize data files setup
     init_data_files()
 
@@ -234,6 +243,7 @@ def snapshot_to_alcove(
 
     # ensure that the data itself does not enter git (if not already ignored)
     from alcove.utils import add_to_data_gitignore
+
     add_to_data_gitignore(snapshot.path)
 
     if edit:
@@ -245,7 +255,9 @@ def snapshot_to_alcove(
     return snapshot
 
 
-def list_steps_cmd(alcove: Alcove, regex: str | None = None, paths: bool = False) -> None:
+def list_steps_cmd(
+    alcove: Alcove, regex: str | None = None, paths: bool = False
+) -> None:
     for step in list_steps(alcove, regex, paths):
         print(step)
 
@@ -340,12 +352,12 @@ def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
     """
     Audit the alcove repository for problems and inconsistencies.
     Can optionally fix issues that are found.
-    
+
     Checks for:
     - Manifest checksum correctness
     - .gitignore includes .data-files reference
     - Data files are properly tracked in .data-files instead of .gitignore
-    
+
     Args:
         alcove: The Alcove instance to audit
         fix: Whether to fix issues that are found
@@ -353,12 +365,12 @@ def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
     # XXX in the future, we could automatically upgrade from one alcove format
     #     version to another, if there were breaking changes
     print(f"Auditing {len(alcove.steps)} steps")
-    
+
     # Check all steps
     for step in alcove.steps:
         audit_step(step, fix)
         console.print(f"[blue]{'OK':>5}[/blue]   {step}")
-    
+
     # Check .gitignore and .data-files setup
     audit_gitignore_setup(fix)
 
@@ -366,15 +378,15 @@ def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
 def check_data_gitignore_exists(fix: bool = False) -> None:
     """
     Check if data/.gitignore exists and create it if it doesn't.
-    
+
     Args:
         fix: Whether to fix issues that are found
     """
     from alcove.utils import print_op
-    
+
     data_dir = Path("data")
     gitignore_path = data_dir / ".gitignore"
-    
+
     # Make sure data directory exists
     if not data_dir.exists():
         if fix:
@@ -383,7 +395,7 @@ def check_data_gitignore_exists(fix: bool = False) -> None:
         else:
             print("WARNING: data/ directory doesn't exist")
             return
-    
+
     if not gitignore_path.exists():
         if fix:
             print_op("CREATE", "data/.gitignore")
@@ -397,7 +409,7 @@ def ensure_data_dir_in_gitignore(fix: bool = False) -> None:
     """
     We no longer need to include a reference to .data-files in .gitignore.
     This is a no-op method retained for backward compatibility.
-    
+
     Args:
         fix: Whether to fix issues that are found
     """
@@ -407,118 +419,124 @@ def ensure_data_dir_in_gitignore(fix: bool = False) -> None:
 def find_data_patterns_in_gitignore() -> list[str]:
     """
     Find data file patterns in .gitignore that should be in data/.gitignore.
-    
+
     Returns:
         A list of patterns that should be moved to data/.gitignore
     """
     gitignore = Path(".gitignore")
-    
+
     if not gitignore.exists():
         return []
-    
+
     with open(gitignore) as f:
         gitignore_entries = [line.strip() for line in f if line.strip()]
-    
+
     # Look for data file patterns in .gitignore
     data_patterns = []
     for entry in gitignore_entries:
         if entry.startswith("data/"):
             data_patterns.append(entry)
-    
+
     return data_patterns
 
 
 def migrate_data_patterns_to_data_gitignore(fix: bool = False) -> None:
     """
     Move data file patterns from .gitignore to data/.gitignore.
-    
+
     Args:
         fix: Whether to fix issues that are found
     """
     from alcove.utils import print_op
-    
+
     gitignore = Path(".gitignore")
     data_dir = Path("data")
-    
+
     # Find data patterns in .gitignore
     data_patterns = find_data_patterns_in_gitignore()
-    
+
     if data_patterns:
         if fix:
-            print(f"Moving {len(data_patterns)} entries from .gitignore to data/.gitignore")
-            
+            print(
+                f"Moving {len(data_patterns)} entries from .gitignore to data/.gitignore"
+            )
+
             # Create data directory if it doesn't exist
             if not data_dir.exists():
                 data_dir.mkdir(parents=True, exist_ok=True)
                 print_op("CREATE", "data/")
-            
+
             # Check for existing data/.gitignore
             data_gitignore = data_dir / ".gitignore"
             if data_gitignore.exists():
                 with open(data_gitignore) as f:
-                    data_gitignore_entries = set(line.strip() for line in f if line.strip())
+                    data_gitignore_entries = set(
+                        line.strip() for line in f if line.strip()
+                    )
             else:
                 data_gitignore_entries = set()
                 # Always ensure "tables/" is included
                 data_gitignore_entries.add("tables/")
-            
+
             # First get list of all entries, preserving previous entries
             all_entries = set(["tables/"])  # Always include tables/
             for entry in data_gitignore_entries:
                 if entry != "tables/":
                     all_entries.add(entry)
-                    
+
             # Add migrated entries from .gitignore
             for pattern in data_patterns:
                 if pattern.startswith("data/"):
                     pattern_without_prefix = pattern[5:]  # Remove "data/" prefix
                     if pattern_without_prefix != "tables/":
                         all_entries.add(pattern_without_prefix)
-            
+
             # Add new entries to data/.gitignore, removing the "data/" prefix
             with data_gitignore.open("w") as f:
                 # Write all entries in sorted order
                 for entry in sorted(all_entries):
                     print(entry, file=f)
-            
+
             # Read gitignore entries again to make sure we have the latest
             with open(gitignore) as f:
                 gitignore_entries = [line.strip() for line in f if line.strip()]
-            
+
             # Create new contents for .gitignore with data patterns removed
             new_gitignore_entries = []
-            
+
             for entry in gitignore_entries:
                 if entry not in data_patterns and entry != ".data-files":
                     new_gitignore_entries.append(entry)
-            
+
             # Write updated .gitignore
             with gitignore.open("w") as f:
                 for entry in new_gitignore_entries:
                     print(entry, file=f)
         else:
-            print(f"WARNING: Found {len(data_patterns)} data file patterns in .gitignore that should be in data/.gitignore")
+            print(
+                f"WARNING: Found {len(data_patterns)} data file patterns in .gitignore that should be in data/.gitignore"
+            )
 
 
 def audit_gitignore_setup(fix: bool = False) -> None:
     """
     Audit the .gitignore and data/.gitignore setup.
-    
+
     Checks for:
     - data/.gitignore exists and includes tables/
     - No data file patterns in .gitignore that should be in data/.gitignore
-    
+
     Args:
         fix: Whether to fix issues that are found
     """
     from alcove.utils import print_op
-    
+
     # Check if data/.gitignore exists
     check_data_gitignore_exists(fix)
-    
+
     # Move data patterns from .gitignore to data/.gitignore
     migrate_data_patterns_to_data_gitignore(fix)
-    
+
     # If .data-files exists, also migrate its contents to data/.gitignore
     old_data_files = Path(".data-files")
     if old_data_files.exists():
@@ -526,31 +544,33 @@ def audit_gitignore_setup(fix: bool = False) -> None:
             print("Migrating .data-files to data/.gitignore")
             data_dir = Path("data")
             data_gitignore = data_dir / ".gitignore"
-            
+
             # Create data directory if it doesn't exist
             if not data_dir.exists():
                 data_dir.mkdir(parents=True, exist_ok=True)
                 print_op("CREATE", "data/")
-            
+
             # Read existing data/.gitignore content
             if data_gitignore.exists():
                 with open(data_gitignore) as f:
-                    data_gitignore_entries = set(line.strip() for line in f if line.strip())
+                    data_gitignore_entries = set(
+                        line.strip() for line in f if line.strip()
+                    )
             else:
                 data_gitignore_entries = set()
                 # Always ensure "tables/" is included
                 data_gitignore_entries.add("tables/")
-            
+
             # Read entries from .data-files
             with open(old_data_files) as f:
                 data_files_entries = [line.strip() for line in f if line.strip()]
-            
+
             # First get list of all entries, preserving previous entries too
             all_entries = set(["tables/"])  # Always include tables/
             for entry in data_gitignore_entries:
                 if entry != "tables/":
                     all_entries.add(entry)
-                    
+
             # Add migrated entries from .data-files
             for entry in data_files_entries:
                 if entry.startswith("data/"):
@@ -559,18 +579,20 @@ def audit_gitignore_setup(fix: bool = False) -> None:
                         all_entries.add(entry_without_prefix)
                 elif entry != "tables/":
                     all_entries.add(entry)
-            
+
             # Write data/.gitignore with all entries
             with data_gitignore.open("w") as f:
                 # Write all entries in sorted order
                 for entry in sorted(all_entries):
                     print(entry, file=f)
-            
+
             # Remove the old .data-files file
             old_data_files.unlink()
             print_op("REMOVE", ".data-files")
         else:
-            print("WARNING: .data-files exists and should be migrated to data/.gitignore")
+            print(
+                "WARNING: .data-files exists and should be migrated to data/.gitignore"
+            )
 
 
 def audit_step(step: StepURI, fix: bool = False) -> None:
@@ -619,37 +641,13 @@ def execute_query(
     names: Literal["short", "full", "both"] = "both",
     csv: bool = False,
 ) -> None:
-    tables = _get_tables(alcove)
+    with AlcoveDB(alcove=alcove, names=names) as db:
+        result = db.sql(query).to_pandas()
 
-    # Create temporary views
-    conn = duckdb.connect(":memory:")
-    for path in tables:
-        table_name = _path_to_snake(path)
-        table_path = (Path("data/tables") / path).with_suffix(".parquet")
-        conn.execute(
-            f"CREATE VIEW {table_name} AS SELECT * FROM read_parquet('{table_path}')"
-        )
-
-    if names == "both":
-        for alias, table_name in _table_aliases(tables):
-            conn.execute(f'CREATE VIEW "{alias}" AS SELECT * FROM "{table_name}"')
-
-    elif names == "short":
-        for alias, table_name in _table_aliases(tables):
-            conn.execute(f'ALTER VIEW "{table_name}" RENAME TO "{alias}"')
-
-    if query.count(" ") == 0:
-        # this is a full-table extraction
-        query = f'SELECT * FROM "{query}"'
-
-    result = conn.execute(query).fetchdf()
-
-    if csv:
-        print(result.to_csv(index=False))
-    else:
-        print(result.to_json(orient="records"))
-
-    conn.close()
+        if csv:
+            print(result.to_csv(index=False))
+        else:
+            print(result.to_json(orient="records"))
 
 
 def duckdb_shell(alcove: Alcove, names: str = "both") -> None:
@@ -681,64 +679,6 @@ def duckdb_shell(alcove: Alcove, names: str = "both") -> None:
         f.write(sql)
         f.flush()
         subprocess.run(f'duckdb -cmd ".read {f.name}"', shell=True)
-
-
-def _path_to_snake(path: str) -> str:
-    return path.replace("/", "_").replace("-", "").rsplit(".", 1)[0]
-
-
-def _get_tables(alcove: Alcove) -> list[str]:
-    tables = []
-    for step in alcove.steps:
-        if step.scheme == "table":
-            tables.append(step.path)
-
-    return tables
-
-
-def _table_aliases(tables: list[str]) -> list[tuple[str, str]]:
-    # map potential aliases to table names
-    potential_aliases: dict[str, set[str]] = defaultdict(set)
-    for path in tables:
-        parts = path.split("/")
-
-        # Generate all possible suffixes without version and with version
-        for i in range(len(parts) - 1):
-            # Suffix without version
-            no_version = "/".join(parts[i:-1])
-            if no_version:
-                potential_aliases[no_version].add(path)
-
-            # Suffix with version
-            with_version = "/".join(parts[i:])
-            if with_version != path:
-                potential_aliases[with_version].add(path)
-
-    # only keep unique ones
-    best_alias: dict[str, str] = {}
-    for alias, paths in potential_aliases.items():
-        if len(paths) == 1:
-            # this is a potentially unique alias
-            (path,) = paths
-            table_alias = _path_to_snake(alias)
-            table_name = _path_to_snake(path)
-
-            best_alias[table_name] = _better_alias(
-                table_alias, best_alias.get(table_name)
-            )
-
-    return [(table_alias, table_name) for table_name, table_alias in best_alias.items()]
-
-
-def _better_alias(a: str, b: str | None) -> str:
-    if not b:
-        return a
-
-    return min([(_has_version(a), len(a), a), (_has_version(b), len(b), b)])[-1]
-
-
-def _has_version(name: str) -> bool:
-    return bool(re.match(r".*_((d{4}-\d{2}-\d{2})|latest)$", name))
 
 
 def _maybe_add_version(dataset_name: str) -> str:

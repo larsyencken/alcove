@@ -1,6 +1,6 @@
 [project]
 name = "alcove"
-version = "0.2.1"
+version = "0.2.2"
 description = "An opinionated small-scale ETL framework for managing data files and directories in a content-addressable way."
 authors = [{ name = "Lars Yencken", email = "lars@yencken.org" }]
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
     "rich>=13.7.1",
     "polars>=1.4.0",
     "duckdb>=1.0.0",
+    "pyarrow>=23.0.0",
 ]
 readme = "README.md"
 requires-python = ">= 3.12"
@@ -36,6 +37,9 @@ alcove = "alcove:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+exclude = [".claude/"]
 
 [tool.rye]
 managed = true

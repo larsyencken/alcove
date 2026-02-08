@@ -156,6 +156,40 @@ def test_shelve_directory(setup_test_environment):
     assert (data_path / "file2.txt").exists()
 
 
+def test_force_overwrite_directory_snapshot(setup_test_environment):
+    tmp_path = setup_test_environment
+
+    # configure test
+    path = "test_namespace/test_dataset/latest"
+    data_path = tmp_path / "data/snapshots/" / path
+
+    # create initial directory snapshot
+    local_data_dir = tmp_path / "example"
+    local_data_dir.mkdir()
+    (local_data_dir / "file1.txt").write_text("Hello, World!")
+    (local_data_dir / "file2.txt").write_text("Hello, Cosmos!")
+
+    Alcove.init()
+    snapshot_to_alcove(local_data_dir, path)
+    assert data_path.is_dir()
+    assert (data_path / "file1.txt").read_text() == "Hello, World!"
+
+    # update local data with different content and different files
+    shutil.rmtree(local_data_dir)
+    local_data_dir.mkdir()
+    (local_data_dir / "file1.txt").write_text("Updated content")
+    (local_data_dir / "file3.txt").write_text("New file")
+
+    # force overwrite should succeed (previously raised FileExistsError)
+    snapshot_to_alcove(local_data_dir, path, force=True)
+
+    # verify new content replaced old
+    assert (data_path / "file1.txt").read_text() == "Updated content"
+    assert (data_path / "file3.txt").read_text() == "New file"
+    # old file2.txt should be gone
+    assert not (data_path / "file2.txt").exists()
+
+
 def test_add_file_with_arbitrary_depth_namespace(setup_test_environment):
     tmp_path = setup_test_environment
 

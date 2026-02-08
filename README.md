@@ -253,6 +253,7 @@ All tests require Docker with MinIO container to be available.
 ### Docker Context Support
 
 The testing framework automatically detects your current Docker context and uses it for container operations. This ensures tests work properly with:
+
 - Docker Desktop
 - Colima
 - OrbStack
@@ -261,23 +262,29 @@ The testing framework automatically detects your current Docker context and uses
 ### MinIO Configuration
 
 With Docker, these credentials are automatically used:
+
 - Access Key: minioadmin
 - Secret Key: minioadmin
 - Bucket: test-bucket
-- Endpoint: http://localhost:9000
+- Endpoint: <http://localhost:9000>
 
 Containers are automatically managed and kept running between test runs for performance.
 MinIO's health is verified before tests run to ensure proper S3 compatibility.
 
 ## Bugs
 
-Please report any issues at: https://github.com/larsyencken/alcove/issues
+Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
+- `0.2.2`
+  - Fixed `snapshot --force` failing with `FileExistsError` when overwriting directory snapshots
+  - Added programmatic API: `alcove.connect()` returns an `AlcoveDB` that queries tables as Polars DataFrames
+  - Enforced `dim_` columns as composite primary key when new tables are generated
+
 - `0.2.1` (2025-04-28)
   - Fixed gitignore handling by using `data/.gitignore` instead of `.data-files`
-  - Always include `tables/` in `data/.gitignore` 
+  - Always include `tables/` in `data/.gitignore`
   - `alcove audit --fix` now migrates patterns from `.gitignore` and `.data-files` to `data/.gitignore`
 
 - `0.2.0` (2025-04-28)
