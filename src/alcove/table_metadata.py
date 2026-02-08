@@ -199,6 +199,19 @@ def process_table_metadata(
         error_msg = "\n".join(validation_result.errors)
         raise ValidationError(f"Table validation failed for {uri}:\n{error_msg}")
 
+    # Enforce uniqueness on dim_ columns
+    dim_cols = [col for col in df.columns if col.startswith("dim_")]
+    if dim_cols:
+        n_rows = len(df)
+        n_unique = df.select(dim_cols).n_unique()
+        if n_unique != n_rows:
+            n_dupes = n_rows - n_unique
+            raise ValidationError(
+                f"Table {uri} has {n_dupes} duplicate rows "
+                f"for dim columns {dim_cols} "
+                f"({n_rows} rows, {n_unique} unique)"
+            )
+
     # Generate and save final metadata
     final_metadata = metadata.generate(output_path, dependencies)
     save_yaml(final_metadata, _metadata_path(uri))
