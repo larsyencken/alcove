@@ -13,7 +13,11 @@ from alcove.exceptions import ValidationError
 from alcove.paths import TABLE_DIR
 from alcove.schemas import TABLE_SCHEMA
 from alcove.snapshots import Snapshot
-from alcove.table_metadata import _get_executable, _metadata_path, process_table_metadata
+from alcove.table_metadata import (
+    _get_executable,
+    _metadata_path,
+    process_table_metadata,
+)
 from alcove.types import Manifest, StepURI
 from alcove.utils import checksum_file, load_yaml, print_op, save_yaml
 

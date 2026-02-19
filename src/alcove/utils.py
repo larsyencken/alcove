@@ -56,7 +56,7 @@ def print_op(type_: str, message: Any) -> None:
 def add_entry_to_file(file_path: Path, entry: str) -> None:
     """
     Add an entry to a file if it doesn't already exist.
-    
+
     Args:
         file_path: The path to the file to add the entry to
         entry: The string to add to the file
@@ -84,12 +84,12 @@ def ensure_data_gitignore() -> None:
     """
     data_dir = Path("data")
     data_gitignore = data_dir / ".gitignore"
-    
+
     # Create data directory if it doesn't exist
     if not data_dir.exists():
         data_dir.mkdir(parents=True, exist_ok=True)
         print_op("CREATE", "data/")
-    
+
     # Create data/.gitignore if it doesn't exist with the tables/ entry
     if not data_gitignore.exists():
         data_gitignore.write_text("tables/\n")
@@ -98,7 +98,7 @@ def ensure_data_gitignore() -> None:
         # Make sure tables/ is in data/.gitignore
         with open(data_gitignore) as f:
             entries = set(line.strip() for line in f if line.strip())
-        
+
         if "tables/" not in entries:
             add_entry_to_file(data_gitignore, "tables/")
 
@@ -106,21 +106,21 @@ def ensure_data_gitignore() -> None:
 def add_to_data_gitignore(path: Path) -> None:
     """
     Add a path to the data/.gitignore file, creating it if it doesn't exist.
-    
+
     Args:
         path: The path to add to data/.gitignore
     """
     data_dir = Path("data")
     data_gitignore = data_dir / ".gitignore"
     path_str = str(path.relative_to(BASE_DIR))
-    
+
     # First ensure data/.gitignore exists
     ensure_data_gitignore()
-    
+
     # If path starts with "data/", remove that prefix
     if path_str.startswith("data/"):
         path_str = path_str[5:]  # Remove "data/" prefix
-    
+
     # Then add the path to data/.gitignore
     add_entry_to_file(data_gitignore, path_str)
 
@@ -129,7 +129,7 @@ def add_to_gitignore(path: Path) -> None:
     """
     Legacy function to add a path directly to .gitignore.
     This will be phased out in favor of add_to_data_gitignore.
-    
+
     Args:
         path: The path to add to .gitignore
     """
