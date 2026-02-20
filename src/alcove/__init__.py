@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from alcove import steps
 from alcove.core import Alcove
+from alcove.wildcards import expand_wildcards
 from alcove.db import (
     AlcoveDB as AlcoveDB,
     connect as connect,
@@ -265,7 +266,7 @@ def list_steps_cmd(
 def list_steps(
     alcove: Alcove, regex: str | None = None, paths: bool = False
 ) -> list[Path] | list[StepURI]:
-    steps = sorted(alcove.steps)
+    steps = sorted(s for s in alcove.steps if not s.is_wildcard)
 
     if regex:
         steps = [s for s in steps if re.search(regex, str(s))]
@@ -288,10 +289,12 @@ def plan_and_run(
     # XXX in the future, we could create a Plan object that explains why each step has
     #     been selected to be run, even down to the level of which checksums are out of
     #     date or which files are missing
-    dag = alcove.steps
+    dag = dict(alcove.steps)
 
     for step, dependencies in dag.items():
         dag[step] = resolve_latest(dependencies, alcove)
+
+    dag, wildcard_groups = expand_wildcards(dag)
 
     if regex:
         dag = steps.prune_with_regex(dag, regex)
@@ -303,7 +306,7 @@ def plan_and_run(
         print("Already up to date!")
         return
 
-    steps.execute_dag(dag, dry_run=dry_run)
+    steps.execute_dag(dag, dry_run=dry_run, wildcard_groups=wildcard_groups)
 
 
 def resolve_latest(dependencies: list[StepURI], alcove: Alcove) -> list[StepURI]:
@@ -327,6 +330,8 @@ def export_duckdb(alcove: Alcove, db_file: str, short: bool = False) -> None:
 
     tables = _get_tables(alcove)
     for table in tables:
+        if table.endswith("/*"):
+            continue
         table_name = table.replace("/", "_").replace("-", "").rsplit(".", 1)[0]
         table_path = (Path("data/tables") / table).with_suffix(".parquet")
 
@@ -368,6 +373,8 @@ def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
 
     # Check all steps
     for step in alcove.steps:
+        if step.is_wildcard:
+            continue
         audit_step(step, fix)
         console.print(f"[blue]{'OK':>5}[/blue]   {step}")
 

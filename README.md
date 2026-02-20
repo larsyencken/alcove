@@ -277,6 +277,11 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
+- `dev`
+  - Added wildcard `*` support in step URIs for date-partitioned tables (e.g. `table://foo/*` expands per snapshot version)
+  - `AlcoveDB` now registers union views across all partitions of a wildcard group
+  - Fixed DAG mutation bug in `plan_and_run` (steps dict is now copied before modification)
+
 - `0.2.2`
   - Fixed `snapshot --force` failing with `FileExistsError` when overwriting directory snapshots
   - Added programmatic API: `alcove.connect()` returns an `AlcoveDB` that queries tables as Polars DataFrames

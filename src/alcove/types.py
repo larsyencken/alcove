@@ -24,6 +24,24 @@ class StepURI:
         return f"{self.scheme}://{self.path}"
 
     @property
+    def is_wildcard(self) -> bool:
+        return self.path.endswith("/*")
+
+    @property
+    def base_path(self) -> str:
+        """Path prefix before the last segment, e.g. 'foo/bar/*' -> 'foo/bar'."""
+        return self.path.rsplit("/", 1)[0]
+
+    @property
+    def version(self) -> str:
+        """Last path segment, e.g. 'foo/2025-02-17' -> '2025-02-17'."""
+        return self.path.rsplit("/", 1)[-1]
+
+    def with_version(self, v: str) -> "StepURI":
+        """Replace last segment with a new version."""
+        return StepURI(self.scheme, f"{self.base_path}/{v}")
+
+    @property
     def full_path(self):
         if self.scheme == "snapshot":
             return paths.SNAPSHOT_DIR / self.path

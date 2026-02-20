@@ -21,6 +21,7 @@ class AlcoveDB:
             alcove = Alcove()
 
         tables = _get_tables(alcove)
+        wildcard_tables = _get_wildcard_tables(alcove)
 
         self._conn = duckdb.connect(":memory:")
         for path in tables:
@@ -28,6 +29,14 @@ class AlcoveDB:
             table_path = (Path("data/tables") / path).with_suffix(".parquet")
             self._conn.execute(
                 f"CREATE VIEW \"{table_name}\" AS SELECT * FROM read_parquet('{table_path}')"
+            )
+
+        # Create union views for wildcard groups
+        for base_path in wildcard_tables:
+            union_name = _path_to_snake(base_path)
+            glob_path = Path("data/tables") / base_path / "*.parquet"
+            self._conn.execute(
+                f"CREATE VIEW \"{union_name}\" AS SELECT * FROM read_parquet('{glob_path}')"
             )
 
         if names == "both":
@@ -88,10 +97,19 @@ def _path_to_snake(path: str) -> str:
 def _get_tables(alcove: Alcove) -> list[str]:
     tables = []
     for step in alcove.steps:
-        if step.scheme == "table":
+        if step.scheme == "table" and not step.is_wildcard:
             tables.append(step.path)
 
     return tables
+
+
+def _get_wildcard_tables(alcove: Alcove) -> list[str]:
+    """Return base_paths for table://*  entries."""
+    bases = []
+    for step in alcove.steps:
+        if step.scheme == "table" and step.is_wildcard:
+            bases.append(step.base_path)
+    return bases
 
 
 def _table_aliases(tables: list[str]) -> list[tuple[str, str]]:

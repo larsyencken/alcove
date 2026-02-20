@@ -27,10 +27,10 @@
             "type": "string",
             "$oneOf": [
               {
-                "pattern": "^snapshot://[a-z0-9-/]+$"
+                "pattern": "^snapshot://[a-z0-9-/*]+$"
               },
               {
-                "pattern": "^table://[a-z0-9-/]+.(jsonl|csv|feather)$"
+                "pattern": "^table://[a-z0-9-/*]+$"
               }
             ]
           }

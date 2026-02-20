@@ -74,6 +74,8 @@ class Alcove:
         versions = [
             s
             for s in self.steps
-            if s.scheme == step.scheme and s.path.startswith(prefix)
+            if s.scheme == step.scheme
+            and s.path.startswith(prefix)
+            and not s.is_wildcard
         ]
         return max(versions)

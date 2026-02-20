@@ -10,7 +10,7 @@ import jsonschema
 import polars as pl
 
 from alcove.exceptions import ValidationError
-from alcove.paths import TABLE_DIR
+from alcove.paths import SNAPSHOT_DIR, TABLE_DIR
 from alcove.schemas import TABLE_SCHEMA
 from alcove.snapshots import Snapshot
 from alcove.table_metadata import (
@@ -52,12 +52,16 @@ def is_completed(uri: StepURI, deps: list[StepURI]) -> bool:
     return True
 
 
-def build_table(uri: StepURI, dependencies: list[StepURI]) -> None:
+def build_table(
+    uri: StepURI,
+    dependencies: list[StepURI],
+    wildcard_groups: dict[str, list[str]] | None = None,
+) -> None:
     """Build a table and handle its metadata."""
     assert uri.scheme == "table"
 
     dest_path = _prepare_output_path(uri)
-    runtime_info = _execute_table_build(uri, dependencies, dest_path)
+    runtime_info = _execute_table_build(uri, dependencies, dest_path, wildcard_groups)
     _handle_metadata(uri, dependencies, dest_path, runtime_info)
 
 
@@ -71,10 +75,13 @@ def _prepare_output_path(uri: StepURI) -> Path:
 
 
 def _execute_table_build(
-    uri: StepURI, dependencies: list[StepURI], dest_path: Path
+    uri: StepURI,
+    dependencies: list[StepURI],
+    dest_path: Path,
+    wildcard_groups: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Execute the table build and return runtime information."""
-    command = _generate_build_command(uri, dependencies)
+    command = _generate_build_command(uri, dependencies, wildcard_groups)
     start_time = datetime.now()
     runtime_info: dict[str, Any] = {
         "start_time": start_time.isoformat(),
@@ -120,12 +127,25 @@ def _handle_metadata(
         raise
 
 
-def _generate_build_command(uri: StepURI, dependencies: list[StepURI]) -> list[Path]:
+def _generate_build_command(
+    uri: StepURI,
+    dependencies: list[StepURI],
+    wildcard_groups: dict[str, list[str]] | None = None,
+) -> list[Path]:
     executable = _get_executable(uri)
 
     cmd = [executable]
+
+    # Check if any deps should be collapsed to a glob path
+    added_globs: set[str] = set()
     for dep in dependencies:
-        cmd.append(_dependency_path(dep))
+        group_key = f"{dep.scheme}://{dep.base_path}"
+        if wildcard_groups and group_key in wildcard_groups:
+            if group_key not in added_globs:
+                cmd.append(_dependency_glob_path(dep))
+                added_globs.add(group_key)
+        else:
+            cmd.append(_dependency_path(dep))
 
     dest_path = TABLE_DIR / f"{uri.path}.parquet"
     cmd.append(dest_path)
@@ -139,6 +159,17 @@ def _dependency_path(uri: StepURI) -> Path:
 
     elif uri.scheme == "table":
         return TABLE_DIR / f"{uri.path}.parquet"
+    else:
+        raise ValueError(f"Unknown scheme {uri.scheme}")
+
+
+def _dependency_glob_path(uri: StepURI) -> Path:
+    """Return a glob path for all versions under a base_path, e.g. data/tables/foo/*.parquet."""
+    if uri.scheme == "snapshot":
+        return SNAPSHOT_DIR / uri.base_path / "*"
+
+    elif uri.scheme == "table":
+        return TABLE_DIR / uri.base_path / "*.parquet"
     else:
         raise ValueError(f"Unknown scheme {uri.scheme}")
 
