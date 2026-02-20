@@ -1,0 +1,43 @@
+site_name: Alcove
+site_description: An opinionated small-scale ETL framework for managing data files and directories in a content-addressable way.
+site_url: https://larsyencken.github.io/alcove/
+repo_url: https://github.com/larsyencken/alcove
+repo_name: larsyencken/alcove
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.instant
+    - navigation.sections
+
+nav:
+  - Overview: index.md
+  - Getting Started: getting-started.md
+  - Commands: commands.md
+  - Wildcards: wildcards.md
+  - Python API: python-api.md
+  - Development: development.md
+  - Changelog: changelog.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - toc:
+      permalink: true

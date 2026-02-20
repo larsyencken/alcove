@@ -5,8 +5,6 @@
 
 _A personal ETL and data lake._
 
-Status: in alpha, changing often
-
 ## Overview
 
 Alcove is an opinionated small-scale ETL framework for managing data files and directories in a content-addressable way.

@@ -41,12 +41,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.sdist]
 exclude = [".claude/"]
 
-[tool.rye]
-managed = true
-dev-dependencies = ["pytest>=8.3.1", "minio>=7.2.7"]
-
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "minio>=7.2.10",
     "pyright>=1.1.387",
     "pytest>=8.3.3",
@@ -55,4 +51,5 @@ dev-dependencies = [
     "docker>=7.0.0",
     "twine>=6.1.0",
     "hatchling>=1.27.0",
+    "zensical>=0.0.23",
 ]

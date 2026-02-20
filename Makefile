@@ -1,4 +1,4 @@
-.PHONY: help unittest format lint typecheck test act build publish
+.PHONY: help unittest format lint typecheck test act build publish docs docs-build
 
 # Default target
 help:
@@ -11,6 +11,8 @@ help:
 	@echo "  make act            - Run GitHub Actions locally with act"
 	@echo "  make build          - Build package for distribution"
 	@echo "  make publish        - Publish package to PyPI"
+	@echo "  make docs           - Serve docs locally"
+	@echo "  make docs-build     - Build docs with strict checking"
 
 # Reformat using ruff
 format:
@@ -55,3 +57,11 @@ build:
 publish: build
 	@echo "==> Publishing to PyPI"
 	@uv run twine upload dist/*
+
+docs:
+	@echo "==> Serving docs locally"
+	@uv run zensical serve
+
+docs-build:
+	@echo "==> Building docs"
+	@uv run zensical build --clean
