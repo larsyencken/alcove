@@ -25,7 +25,7 @@
           "minItems": 0,
           "items": {
             "type": "string",
-            "$oneOf": [
+            "oneOf": [
               {
                 "pattern": "^snapshot://[a-z0-9-/*]+$"
               },

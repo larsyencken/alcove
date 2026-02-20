@@ -52,16 +52,12 @@ def is_completed(uri: StepURI, deps: list[StepURI]) -> bool:
     return True
 
 
-def build_table(
-    uri: StepURI,
-    dependencies: list[StepURI],
-    wildcard_groups: dict[str, list[str]] | None = None,
-) -> None:
+def build_table(uri: StepURI, dependencies: list[StepURI]) -> None:
     """Build a table and handle its metadata."""
     assert uri.scheme == "table"
 
     dest_path = _prepare_output_path(uri)
-    runtime_info = _execute_table_build(uri, dependencies, dest_path, wildcard_groups)
+    runtime_info = _execute_table_build(uri, dependencies, dest_path)
     _handle_metadata(uri, dependencies, dest_path, runtime_info)
 
 
@@ -78,10 +74,9 @@ def _execute_table_build(
     uri: StepURI,
     dependencies: list[StepURI],
     dest_path: Path,
-    wildcard_groups: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Execute the table build and return runtime information."""
-    command = _generate_build_command(uri, dependencies, wildcard_groups)
+    command = _generate_build_command(uri, dependencies)
     start_time = datetime.now()
     runtime_info: dict[str, Any] = {
         "start_time": start_time.isoformat(),
@@ -128,19 +123,20 @@ def _handle_metadata(
 
 
 def _generate_build_command(
-    uri: StepURI,
-    dependencies: list[StepURI],
-    wildcard_groups: dict[str, list[str]] | None = None,
+    uri: StepURI, dependencies: list[StepURI]
 ) -> list[Path]:
     executable = _get_executable(uri)
 
     cmd = [executable]
 
-    # Check if any deps should be collapsed to a glob path
+    # When multiple deps share the same scheme + base_path (1:n wildcard
+    # expansion), collapse them into a single glob path instead of passing
+    # each version individually.
+    group_counts = Counter(f"{d.scheme}://{d.base_path}" for d in dependencies)
     added_globs: set[str] = set()
     for dep in dependencies:
         group_key = f"{dep.scheme}://{dep.base_path}"
-        if wildcard_groups and group_key in wildcard_groups:
+        if group_counts[group_key] > 1:
             if group_key not in added_globs:
                 cmd.append(_dependency_glob_path(dep))
                 added_globs.add(group_key)

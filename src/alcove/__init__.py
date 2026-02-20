@@ -294,7 +294,7 @@ def plan_and_run(
     for step, dependencies in dag.items():
         dag[step] = resolve_latest(dependencies, alcove)
 
-    dag, wildcard_groups = expand_wildcards(dag)
+    dag, _ = expand_wildcards(dag)
 
     if regex:
         dag = steps.prune_with_regex(dag, regex)
@@ -306,7 +306,7 @@ def plan_and_run(
         print("Already up to date!")
         return
 
-    steps.execute_dag(dag, dry_run=dry_run, wildcard_groups=wildcard_groups)
+    steps.execute_dag(dag, dry_run=dry_run)
 
 
 def resolve_latest(dependencies: list[StepURI], alcove: Alcove) -> list[StepURI]:
@@ -330,7 +330,7 @@ def export_duckdb(alcove: Alcove, db_file: str, short: bool = False) -> None:
 
     tables = _get_tables(alcove)
     for table in tables:
-        if table.endswith("/*"):
+        if StepURI("table", table).is_wildcard:
             continue
         table_name = table.replace("/", "_").replace("-", "").rsplit(".", 1)[0]
         table_path = (Path("data/tables") / table).with_suffix(".parquet")

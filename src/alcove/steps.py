@@ -64,31 +64,23 @@ def is_completed(step: StepURI, deps: list[StepURI]) -> bool:
     raise ValueError(f"Unknown scheme {step.scheme}")
 
 
-def execute_dag(
-    dag: Dag,
-    dry_run: bool = False,
-    wildcard_groups: dict[str, list[str]] | None = None,
-) -> None:
+def execute_dag(dag: Dag, dry_run: bool = False) -> None:
     "Execute the DAG."
     to_execute = in_topological_order(dag)
     print(f"Executing {len(to_execute)} steps")
     for step in to_execute:
         print(step)
         if not dry_run:
-            execute_step(step, dag[step], wildcard_groups=wildcard_groups)
+            execute_step(step, dag[step])
 
 
-def execute_step(
-    step: StepURI,
-    dependencies: List[StepURI],
-    wildcard_groups: dict[str, list[str]] | None = None,
-) -> None:
+def execute_step(step: StepURI, dependencies: List[StepURI]) -> None:
     "Execute a single step."
     if step.scheme == "snapshot":
         return snapshots.Snapshot.load(step.path).fetch()
 
     elif step.scheme == "table":
-        return tables.build_table(step, dependencies, wildcard_groups=wildcard_groups)
+        return tables.build_table(step, dependencies)
 
     else:
         raise ValueError(f"Unknown scheme {step.scheme}")
