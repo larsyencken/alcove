@@ -275,10 +275,12 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
-- `dev`
+- `0.3.0`
   - Added wildcard `*` support in step URIs for date-partitioned tables (e.g. `table://foo/*` expands per snapshot version)
   - `AlcoveDB` now registers union views across all partitions of a wildcard group
   - Fixed DAG mutation bug in `plan_and_run` (steps dict is now copied before modification)
+  - Table names now require underscores instead of dashes
+  - Added documentation site with Zensical
 
 - `0.2.2`
   - Fixed `snapshot --force` failing with `FileExistsError` when overwriting directory snapshots
