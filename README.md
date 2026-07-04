@@ -3,20 +3,37 @@
 [![CI](https://github.com/larsyencken/alcove/actions/workflows/ci.yml/badge.svg)](https://github.com/larsyencken/alcove/actions/workflows/ci.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 
-_A personal ETL and data lake._
+_A reproducible data pipeline for research and analysis._
 
 ## Overview
 
-Alcove is an opinionated small-scale ETL framework for managing data files and directories in a content-addressable way.
+Alcove is a data pipeline framework designed for reproducible research, policy analysis, and data journalism. Think of it as a middle ground between ad-hoc Jupyter notebooks and enterprise ETL tools—providing the structure needed for reliable, citable analysis without the complexity of production data platforms.
 
-## Core principles
+Inspired by projects like Our World In Data's ETL system, Alcove helps researchers and analysts create transparent, versionable data workflows that can be shared, reproduced, and built upon.
 
-- **A reusable framework.** Alcove provides a structured way of managing data files, scripts and their interdependencies that can be used across multiple projects.
-- **First class metadata.** Every data file has an accompanying metadata sidecar that can be used to store provenance, licensing and other information.
-- **Content addressed.** An `alcove` DAG is a Merkle tree of checksums that includes data, metadata and scripts, used to lazily rebuild only what is out of date.
-- **Data versioning.** Every step in the DAG has a URI that includes a version, which can be an ISO date or `latest`, to encourage a reproducible workflow that still allows for change.
-- **SQL support.** Alcove is a Python framework, but allows you to write steps in SQL which will be executed by DuckDB.
-- **Parquet interchange.** All derived tables are generated as Parquet, which makes reuse easier.
+## Why Alcove?
+
+**For Researchers and Analysts:**
+- Transform scattered scripts into a coherent, reproducible pipeline
+- Ensure your analysis can be recreated months or years later
+- Build on existing datasets with confidence in provenance
+- Share methodology transparently with colleagues and reviewers
+
+**Built for Research Workflows:**
+- **Reproducible by Design:** Content-addressable storage ensures exact reproducibility
+- **Rich Metadata:** Track data sources, licenses, access dates, and methodology notes
+- **Version Control for Data:** Every dataset has explicit versions (ISO dates or semantic tags)
+- **Flexible Execution:** Write transformations in SQL or Python as needed
+- **Local-First:** Work offline, sync to cloud storage when ready
+- **Open Standards:** Parquet output for maximum interoperability
+
+## Core Principles
+
+- **Transparency:** Every step in your pipeline is explicit and auditable
+- **Provenance:** Track the complete lineage from raw data to final analysis  
+- **Reproducibility:** Content-addressable storage prevents silent data changes
+- **Collaboration:** Share datasets and methodologies with clear metadata
+- **Simplicity:** Focus on analysis, not infrastructure management
 
 ## Quick Start
 
@@ -24,28 +41,36 @@ Alcove is an opinionated small-scale ETL framework for managing data files and d
 # Install alcove
 pip install alcove  # or: uv add alcove
 
-# Initialize a new alcove
-mkdir my-data-project && cd my-data-project
+# Initialize a new research project
+mkdir world-population-analysis && cd world-population-analysis
 alcove init
 
-# Add a data file to your alcove
-alcove snapshot ~/Downloads/countries.csv countries/latest
+# Add a dataset with proper metadata
+alcove snapshot ~/Downloads/world-population-2024.csv population/2024-01-15
 
-# Create a derived table
-alcove new-table derived/population.sql countries/latest
+# Create a transformation pipeline
+alcove new-table analysis/population-density.sql population/2024-01-15
 
-# Build all tables
+# Build your analysis pipeline
 alcove run
 
-# Explore your data with DuckDB
+# Explore results interactively
 alcove db
 ```
 
+## Use Cases
+
+**Research Publications:** Ensure your paper's analysis can be reproduced exactly
+**Policy Analysis:** Track data sources and methodology for government reports  
+**Data Journalism:** Build transparent, auditable data stories
+**Academic Datasets:** Create shareable, well-documented research datasets
+**Collaborative Research:** Share data pipelines with clear provenance
+
 ## Usage
 
-### Install the package
+## Installation and Setup
 
-You can install the `alcove` package from PyPI using pip, uv, or any other Python package manager:
+### Install from PyPI
 
 ```bash
 # Using pip
@@ -53,72 +78,28 @@ pip install alcove
 
 # Using uv (recommended)
 uv add alcove
-
-# For development
-uv add --dev alcove
 ```
 
-You can also install directly from GitHub for the latest development version:
-
+For the latest development version:
 ```bash
 pip install git+https://github.com/larsyencken/alcove
 ```
 
-### Using Alcove in your project
-
-#### Starting a new project
-
-To start a new project with alcove:
+### Initialize Your Research Project
 
 ```bash
-# Create and navigate to your project directory
-mkdir my-data-project
-cd my-data-project
+# Create your project directory
+mkdir my-research-project && cd my-research-project
 
-# Set up your Python environment (optional, but recommended)
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install alcove
-pip install alcove
-
-# Or with uv
-uv add alcove
-
-# Initialize the alcove
+# Initialize alcove
 alcove init
+
+# Configure S3-compatible storage (see below)
 ```
 
-#### Adding to an existing project
+### Storage Configuration
 
-To add alcove to an existing project:
-
-```bash
-# Navigate to your project directory
-cd your-project
-
-# Install alcove
-uv add alcove   # Or pip install alcove
-
-# Initialize alcove in a subdirectory (optional)
-mkdir data
-cd data
-alcove init
-```
-
-### Initialise an alcove
-
-From the folder where you want to store your data and metadata, run:
-
-```bash
-alcove init
-```
-
-This will create a `alcove.yaml` file, which will serve as the catalogue of all the data in your alcove.
-
-### Configure object storage
-
-You will need to configure your S3-compatible storage credentials in a `.env` file, in the same directory as your `alcove.yaml` file. Define:
+Alcove uses S3-compatible storage for dataset sharing and backup. Create a `.env` file in your project directory:
 
 ```
 S3_ACCESS_KEY=your_application_key_id
@@ -127,113 +108,125 @@ S3_BUCKET_NAME=your_bucket_name
 S3_ENDPOINT_URL=your_endpoint_url
 ```
 
-Now your alcove is ready to use.
+This enables sharing datasets with collaborators and ensures your analysis remains reproducible even if source files change.
 
-### Adding a file or folder
+## Working with Datasets
 
-From within your alcove folder, use the `snapshot` command to add a file or folder to your alcove:
+### Adding Source Data
 
-```bash
-alcove snapshot path/to/your/file_or_folder dataset_name
-```
-
-For example:
+Use semantic, dated versions for reproducibility:
 
 ```bash
-alcove snapshot ~/Downloads/countries.csv countries/latest
+# Add with explicit date version
+alcove snapshot ~/Downloads/world-bank-gdp.csv gdp/2024-03-15
+
+# Add the latest version of evolving data  
+alcove snapshot ~/Documents/survey-responses.csv survey/latest
 ```
 
-This will upload the file to your S3-compatible storage, and create a metadata file at `data/<dataset_name>.meta.yaml` directory for you to complete.
+This creates a metadata file at `data/<dataset>.meta.yaml` where you should document:
+- **Data source and URL**
+- **Access date and method**
+- **License information** 
+- **Known limitations or caveats**
 
-The metadata format has some minimum fields, but is meant for you to extend as needed for your own purposes. Best practice would be to retain the provenance and licence information of any data you add to your alcove, especially if it originates from a third party.
+Proper metadata is crucial for research integrity and collaboration.
 
-### Creating a new table
+### Creating Analysis Steps
 
-To create a new table, use the `new-table` command:
+Transform your data with SQL or Python:
 
 ```bash
-alcove new-table <table-path> [dep1 [dep2 [...]]]
+# Create a SQL transformation
+alcove new-table analysis/cleaned-gdp.sql gdp/2024-03-15
+
+# Create a Python analysis step  
+alcove new-table analysis/correlation-matrix gdp/2024-03-15 survey/latest
 ```
 
-This creates a placeholder executable script that generates an example data file based on the file extension (.parquet or .sql).
+This creates executable scripts with dependency tracking built-in.
 
-#### Creating a Parquet table
+#### SQL Transformations
 
-```bash
-alcove new-table path/to/your/table
+SQL files are executed with DuckDB and support template variables:
+
+```sql
+-- analysis/cleaned-gdp.sql
+SELECT 
+    country,
+    year,
+    gdp_usd,
+    population,
+    gdp_usd / population as gdp_per_capita
+FROM '{gdp}'  -- References the dependency
+WHERE year >= 2020
+    AND gdp_usd IS NOT NULL
 ```
 
-This creates a placeholder Python script that generates an example Parquet file:
+#### Python Analysis Scripts  
+
+Python scripts receive dependency file paths as arguments:
 
 ```python
 #!/usr/bin/env python3
 import sys
 import polars as pl
 
-data = {
-    "a": [1, 1, 3],
-    "b": [2, 3, 5],
-    "c": [3, 4, 6]
-}
-
-df = pl.DataFrame(data)
-
+# Load dependencies  
+gdp_file = sys.argv[1]
+survey_file = sys.argv[2]
 output_file = sys.argv[-1]
-df.write_parquet(output_file)
+
+# Your analysis here
+gdp_df = pl.read_parquet(gdp_file)
+survey_df = pl.read_parquet(survey_file)
+
+result = analyze_correlation(gdp_df, survey_df)
+result.write_parquet(output_file)
 ```
 
-#### Creating a SQL table
+### Running Your Analysis Pipeline
+
+Execute your complete analysis with dependency resolution:
 
 ```bash
-alcove new-table path/to/your/table.sql
-```
-
-This creates a placeholder SQL script:
-
-```sql
--- SQL script to create a table
-CREATE TABLE example_table AS
-SELECT
-    1 AS a,
-    2 AS b,
-    3 AS c
-```
-
-#### Opening in your editor
-
-The command also supports the `--edit` option to open the metadata file in your editor:
-
-```bash
-alcove new-table path/to/your/table --edit
-```
-
-### Executing SQL step definitions
-
-If a `.sql` step definition is detected, it will be executed using DuckDB with an in-memory database. The SQL file can use `{variable}` to interpolate template variables. The following template variables are available:
-
-- `{output_file}`: The path to the output file.
-- `{dependency}`: The path of each dependency, simplified to a semantic name.
-
-### Command Reference
-
-Alcove provides the following commands:
-
-- `alcove init` - Initialize a new alcove workspace
-- `alcove snapshot <path> <dataset>` - Add a file or directory to your alcove
-- `alcove run` - Build all tables and fetch outdated data
-- `alcove list` - List all datasets in alphabetical order
-- `alcove audit` - Validate the alcove metadata
-- `alcove new-table <path> [deps...]` - Create a new derived table
-- `alcove db [query]` - Open a DuckDB shell or execute a query
-- `alcove export-duckdb <file>` - Export tables to a DuckDB file
-
-### Building your alcove
-
-Run the `run` command to fetch any data that's out of date and build any derived tables:
-
-```bash
+# Build everything that's out of date
 alcove run
+
+# Explore your results interactively  
+alcove db
+
+# List all datasets in your project
+alcove list
+
+# Validate metadata and dependencies
+alcove audit
 ```
+
+## Command Reference
+
+| Command | Purpose |
+|---------|---------|  
+| `alcove init` | Initialize a new research project workspace |
+| `alcove snapshot <path> <dataset>` | Add a dataset with version tracking |
+| `alcove run` | Execute analysis pipeline (only out-of-date steps) |
+| `alcove list` | List all datasets and their versions |
+| `alcove audit` | Validate metadata and data integrity |
+| `alcove new-table <path> [deps...]` | Create new analysis step |
+| `alcove db [query]` | Interactive DuckDB shell with all data loaded |
+| `alcove export-duckdb <file>` | Export complete dataset to DuckDB file |
+
+## Reproducibility Features
+
+**Content Addressing:** Every dataset is identified by its content hash, preventing silent data corruption
+
+**Explicit Versioning:** Use ISO dates (`gdp/2024-03-15`) or semantic versions (`survey/v2`) instead of ambiguous "latest" 
+
+**Dependency Tracking:** Changes cascade automatically through your analysis pipeline
+
+**Metadata Validation:** Rich schemas ensure complete provenance documentation
+
+**Shareable Pipelines:** S3 storage enables collaboration while preserving exact reproducibility
 
 ## Development
 
