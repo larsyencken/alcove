@@ -6,4 +6,6 @@ BASE_DIR = Path(".")
 DATA_DIR = BASE_DIR / "data"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
 TABLE_DIR = DATA_DIR / "tables"
+ARTIFACT_DIR = DATA_DIR / "artifacts"
 TABLE_SCRIPT_DIR = BASE_DIR / "src" / "steps" / "tables"
+ARTIFACT_SCRIPT_DIR = BASE_DIR / "src" / "steps" / "artifacts"

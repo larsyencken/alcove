@@ -2,6 +2,22 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Alcove config",
   "type": "object",
+  "definitions": {
+    "dependency": {
+      "type": "string",
+      "oneOf": [
+        {
+          "pattern": "^snapshot://[a-z0-9_/*]+$"
+        },
+        {
+          "pattern": "^table://[a-z0-9_/*]+$"
+        },
+        {
+          "pattern": "^artifact://[a-z0-9_/*]+$"
+        }
+      ]
+    }
+  },
   "properties": {
     "version": {
       "type": "integer",
@@ -24,15 +40,14 @@
           "type": "array",
           "minItems": 0,
           "items": {
-            "type": "string",
-            "oneOf": [
-              {
-                "pattern": "^snapshot://[a-z0-9_/*]+$"
-              },
-              {
-                "pattern": "^table://[a-z0-9_/*]+$"
-              }
-            ]
+            "$ref": "#/definitions/dependency"
+          }
+        },
+        "^artifact://": {
+          "type": "array",
+          "minItems": 0,
+          "items": {
+            "$ref": "#/definitions/dependency"
           }
         }
       }

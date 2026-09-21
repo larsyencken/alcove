@@ -3,7 +3,7 @@ from typing import List
 
 import graphlib
 
-from alcove import snapshots, tables
+from alcove import artifacts, snapshots, tables
 from alcove.types import Dag, StepURI
 
 
@@ -61,6 +61,9 @@ def is_completed(step: StepURI, deps: list[StepURI]) -> bool:
     elif step.scheme == "table":
         return tables.is_completed(step, deps)
 
+    elif step.scheme == "artifact":
+        return artifacts.is_completed(step)
+
     raise ValueError(f"Unknown scheme {step.scheme}")
 
 
@@ -81,6 +84,9 @@ def execute_step(step: StepURI, dependencies: List[StepURI]) -> None:
 
     elif step.scheme == "table":
         return tables.build_table(step, dependencies)
+
+    elif step.scheme == "artifact":
+        return artifacts.build_artifact(step, dependencies)
 
     else:
         raise ValueError(f"Unknown scheme {step.scheme}")

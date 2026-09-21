@@ -12,11 +12,13 @@ type Dag = dict["StepURI", list["StepURI"]]
 type DType = str
 type Schema = dict[str, DType]
 
+SCHEMES = ("snapshot", "table", "artifact")
+
 
 @total_ordering
 @dataclass
 class StepURI:
-    scheme: Literal["snapshot", "table"]
+    scheme: Literal["snapshot", "table", "artifact"]
     path: DatasetName
 
     @property
@@ -49,6 +51,9 @@ class StepURI:
         elif self.scheme == "table":
             return paths.TABLE_DIR / self.path
 
+        elif self.scheme == "artifact":
+            return paths.ARTIFACT_DIR / self.path
+
         raise ValueError(f'no common directory found for scheme "{self.scheme}"')
 
     @property
@@ -58,7 +63,7 @@ class StepURI:
     @classmethod
     def parse(cls, uri: str) -> "StepURI":
         scheme, path = uri.split("://")
-        if scheme not in ["snapshot", "table"]:
+        if scheme not in SCHEMES:
             raise ValueError(f"Unknown scheme: {scheme}")
         return cls(scheme, path)  # type: ignore
 

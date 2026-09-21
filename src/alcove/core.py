@@ -68,6 +68,14 @@ class Alcove:
         self.steps[table_uri] = [StepURI.parse(dep) for dep in dependencies]
         self.save()
 
+    def new_artifact(self, artifact_path: str, dependencies: list[str]) -> None:
+        artifact_uri = StepURI("artifact", artifact_path)
+        if artifact_uri in self.steps:
+            raise ValueError(f"Artifact already exists in alcove: {artifact_uri}")
+
+        self.steps[artifact_uri] = [StepURI.parse(dep) for dep in dependencies]
+        self.save()
+
     def get_latest_version(self, step: StepURI) -> StepURI:
         assert step.path.endswith("/latest")
         prefix = step.path.rsplit("/", 1)[0]

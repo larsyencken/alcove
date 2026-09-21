@@ -10,7 +10,7 @@ import jsonschema
 import polars as pl
 
 from alcove.exceptions import ValidationError
-from alcove.paths import SNAPSHOT_DIR, TABLE_DIR
+from alcove.paths import ARTIFACT_DIR, SNAPSHOT_DIR, TABLE_DIR
 from alcove.schemas import TABLE_SCHEMA
 from alcove.snapshots import Snapshot
 from alcove.table_metadata import (
@@ -123,8 +123,12 @@ def _handle_metadata(
 
 
 def _generate_build_command(
-    uri: StepURI, dependencies: list[StepURI]
+    uri: StepURI, dependencies: list[StepURI], dest_path: Path | None = None
 ) -> list[Path]:
+    """The script to run, followed by each dependency's path, then the output path.
+
+    Tables write to their Parquet file; other schemes pass their own dest_path.
+    """
     executable = _get_executable(uri)
 
     cmd = [executable]
@@ -143,7 +147,8 @@ def _generate_build_command(
         else:
             cmd.append(_dependency_path(dep))
 
-    dest_path = TABLE_DIR / f"{uri.path}.parquet"
+    if dest_path is None:
+        dest_path = TABLE_DIR / f"{uri.path}.parquet"
     cmd.append(dest_path)
 
     return cmd
@@ -155,6 +160,10 @@ def _dependency_path(uri: StepURI) -> Path:
 
     elif uri.scheme == "table":
         return TABLE_DIR / f"{uri.path}.parquet"
+
+    elif uri.scheme == "artifact":
+        return ARTIFACT_DIR / uri.path
+
     else:
         raise ValueError(f"Unknown scheme {uri.scheme}")
 
@@ -166,6 +175,10 @@ def _dependency_glob_path(uri: StepURI) -> Path:
 
     elif uri.scheme == "table":
         return TABLE_DIR / uri.base_path / "*.parquet"
+
+    elif uri.scheme == "artifact":
+        return ARTIFACT_DIR / uri.base_path / "*"
+
     else:
         raise ValueError(f"Unknown scheme {uri.scheme}")
 
