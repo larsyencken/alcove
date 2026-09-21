@@ -1,6 +1,8 @@
 # Changelog
 
 - `dev`
+    - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
+    - Added `alcove new-artifact <path> [deps...]`
     - Added wildcard `*` support in step URIs for date-partitioned tables (e.g. `table://foo/*` expands per snapshot version)
     - `AlcoveDB` now registers union views across all partitions of a wildcard group
     - Fixed DAG mutation bug in `plan_and_run` (steps dict is now copied before modification)

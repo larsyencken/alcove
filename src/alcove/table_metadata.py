@@ -10,7 +10,13 @@ import polars as pl
 from rich.console import Console
 
 from alcove.exceptions import ValidationError
-from alcove.paths import SNAPSHOT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
+from alcove.paths import (
+    ARTIFACT_DIR,
+    ARTIFACT_SCRIPT_DIR,
+    SNAPSHOT_DIR,
+    TABLE_DIR,
+    TABLE_SCRIPT_DIR,
+)
 from alcove.schemas import TABLE_CONFIG_SCHEMA
 from alcove.types import StepURI
 from alcove.utils import checksum_file, load_yaml, save_yaml
@@ -217,24 +223,34 @@ def process_table_metadata(
     save_yaml(final_metadata, _metadata_path(uri))
 
 
+def _script_dir(uri: StepURI) -> Path:
+    if uri.scheme == "table":
+        return TABLE_SCRIPT_DIR
+
+    elif uri.scheme == "artifact":
+        return ARTIFACT_SCRIPT_DIR
+
+    raise ValueError(f"Scheme {uri.scheme} has no build scripts")
+
+
 def _get_executable(uri: StepURI, check: bool = True) -> Path:
-    base = TABLE_SCRIPT_DIR / uri.path
+    base = _script_dir(uri) / uri.path
+
+    # artifacts are built by Python only; SQL steps always produce a table
+    suffixes = [".py", ".sql"] if uri.scheme == "table" else [".py"]
 
     for exec_base in [base, base.parent]:
-        py_script = exec_base.with_suffix(".py")
-        sql_script = exec_base.with_suffix(".sql")
+        for suffix in suffixes:
+            script = exec_base.with_suffix(suffix)
+            if not script.exists():
+                continue
 
-        if py_script.exists():
-            if check and not _is_valid_script(py_script):
-                raise Exception(f"Missing execute permissions on {py_script}")
+            if suffix == ".py" and check and not _is_valid_script(script):
+                raise Exception(f"Missing execute permissions on {script}")
 
-            return py_script
+            return script
 
-        elif sql_script.exists():
-            return sql_script
-
-    else:
-        raise FileNotFoundError(f"Could not find script for {uri}")
+    raise FileNotFoundError(f"Could not find script for {uri}")
 
 
 def _is_valid_script(script: Path) -> bool:
@@ -247,6 +263,9 @@ def _metadata_path(uri: StepURI) -> Path:
 
     elif uri.scheme == "table":
         return (TABLE_DIR / f"{uri.path}.parquet").with_suffix(".meta.yaml")
+
+    elif uri.scheme == "artifact":
+        return ARTIFACT_DIR / f"{uri.path}.meta.yaml"
 
     else:
         raise ValueError(f"Unknown scheme {uri.scheme}")

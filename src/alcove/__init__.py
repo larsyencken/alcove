@@ -133,6 +133,20 @@ def main():
         help="Edit the metadata file in an interactive editor.",
     )
 
+    new_artifact_parser = subparsers.add_parser(
+        "new-artifact",
+        help="Create a new artifact step, for outputs that are not tables",
+    )
+    new_artifact_parser.add_argument(
+        "artifact_path", type=str, help="Path to the new artifact"
+    )
+    new_artifact_parser.add_argument(
+        "dependencies",
+        type=str,
+        nargs="*",
+        help="Optional dependencies for the artifact",
+    )
+
     db_parser = subparsers.add_parser(
         "db", help="Enter a DuckDB shell or execute a query"
     )
@@ -185,6 +199,9 @@ def main():
 
     elif args.command == "new-table":
         return new_table(alcove, args.table_path, args.dependencies, args.edit)
+
+    elif args.command == "new-artifact":
+        return alcove.new_artifact(args.artifact_path, args.dependencies)
 
     parser.print_help()
 

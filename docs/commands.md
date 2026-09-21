@@ -12,6 +12,7 @@ Alcove provides the following commands:
 | `alcove list` | List all datasets in alphabetical order |
 | `alcove audit` | Validate the alcove metadata |
 | `alcove new-table <path> [deps...]` | Create a new derived table |
+| `alcove new-artifact <path> [deps...]` | Create a derived output that is not a table |
 | `alcove db [query]` | Open a DuckDB shell or execute a query |
 | `alcove export-duckdb <file>` | Export tables to a DuckDB file |
 
@@ -74,6 +75,36 @@ The command also supports the `--edit` option to open the metadata file in your 
 ```bash
 alcove new-table path/to/your/table --edit
 ```
+
+## Creating an artifact
+
+Not every derived output is a table. A rendered HTML dashboard, a fitted model or a bundle of charts is still a pure function of its dependencies, but has no place in DuckDB. Register these as artifact steps:
+
+```bash
+alcove new-artifact <artifact-path> [dep1 [dep2 [...]]]
+```
+
+For example:
+
+```bash
+alcove new-artifact reports/health/latest table://health/daily/latest
+```
+
+Write the build script at `src/steps/artifacts/<artifact-path>.py`. It is called with the path of each dependency, then an empty output directory, and must write at least one file into that directory:
+
+```python
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+import polars as pl
+
+*deps, out_dir = sys.argv[1:]
+daily = pl.read_parquet(deps[0])
+
+(Path(out_dir) / "index.html").write_text(f"<h1>{len(daily)} days</h1>")
+```
+
+The output lands in `data/artifacts/<artifact-path>/`, with a `.meta.yaml` sidecar recording a checksum of every file produced and of every input. Artifacts rebuild when any dependency or the script changes, can depend on snapshots, tables and other artifacts, and can be depended on by tables in turn. Artifact scripts must be Python; they do not appear in `alcove db`.
 
 ## Executing SQL step definitions
 

@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Artifact metadata",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "description": "Version of the artifact metadata format"
+    },
+    "uri": {
+      "type": "string",
+      "pattern": "^artifact://[a-z0-9-_/]+$"
+    },
+    "checksum": {
+      "type": "string",
+      "description": "Checksum over the manifest of files the artifact produced",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "manifest": {
+      "type": "object",
+      "description": "Checksum of every file in the artifact directory, keyed by relative path",
+      "patternProperties": {
+        "^.+$": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "input_manifest": {
+      "type": "object",
+      "description": "Checksum of the build script and every dependency's metadata file",
+      "patternProperties": {
+        "^.+$": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "execution": {
+      "type": "object"
+    }
+  },
+  "required": ["version", "uri", "checksum", "manifest", "input_manifest"],
+  "additionalProperties": false
+}
