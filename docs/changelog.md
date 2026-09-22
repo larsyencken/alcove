@@ -3,6 +3,7 @@
 - `dev`
     - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
     - Added `alcove new-artifact <path> [deps...]`
+    - Fixed config validation rejecting ISO-date versions (e.g. `snapshot://foo/2024-09-04`) as dependencies; hyphens are now allowed in the version segment only
     - Added wildcard `*` support in step URIs for date-partitioned tables (e.g. `table://foo/*` expands per snapshot version)
     - `AlcoveDB` now registers union views across all partitions of a wildcard group
     - Fixed DAG mutation bug in `plan_and_run` (steps dict is now copied before modification)

@@ -17,19 +17,17 @@ any of those inputs change.
 import shutil
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
-from alcove.paths import ARTIFACT_DIR, DATA_DIR
+from alcove.paths import ARTIFACT_DIR
 from alcove.schemas import ARTIFACT_SCHEMA
-from alcove.table_metadata import _get_executable, _metadata_path
-from alcove.tables import _generate_build_command
+from alcove.table_metadata import _metadata_path
+from alcove.tables import _generate_build_command, _generate_input_manifest, timed_run
 from alcove.types import Manifest, StepURI
 from alcove.utils import (
-    add_entry_to_file,
     checksum_file,
     checksum_folder,
     checksum_manifest,
@@ -71,12 +69,34 @@ def is_completed(uri: StepURI) -> bool:
 
 
 def build_artifact(uri: StepURI, dependencies: list[StepURI]) -> None:
-    "Run the artifact's script into a fresh directory and record what it made."
+    """Build into a scratch directory, then swap it in.
+
+    The previous build stays in place until the new one has succeeded and been
+    checksummed, so a missing script or a failing build never destroys the
+    artifact that is currently being served.
+    """
     assert uri.scheme == "artifact"
 
-    dest_path = _prepare_output_dir(uri)
-    runtime_info = _execute_artifact_build(uri, dependencies, dest_path)
-    manifest = _checksum_output(uri, dest_path)
+    dest_path = artifact_path(uri)
+    build_path = dest_path.with_name(f"{dest_path.name}.building")
+
+    # resolve the script before touching anything on disk
+    command = _generate_build_command(uri, dependencies, build_path)
+
+    _reset_dir(build_path)
+    try:
+        runtime_info = _execute_artifact_build(command)
+        manifest = _checksum_output(uri, build_path)
+    except Exception:
+        shutil.rmtree(build_path, ignore_errors=True)
+        raise
+
+    if dest_path.exists():
+        shutil.rmtree(dest_path)
+        print_op("UPDATE", dest_path)
+    else:
+        print_op("CREATE", dest_path)
+    build_path.rename(dest_path)
 
     metadata = {
         "uri": str(uri),
@@ -91,72 +111,23 @@ def build_artifact(uri: StepURI, dependencies: list[StepURI]) -> None:
 
     # artifacts are build products, like tables; keep them out of git
     ensure_data_gitignore()
-    add_entry_to_file(DATA_DIR / ".gitignore", "artifacts/")
 
 
-def _prepare_output_dir(uri: StepURI) -> Path:
-    "Start from an empty directory so stale files from a previous build cannot linger."
-    dest_path = artifact_path(uri)
-    if dest_path.exists():
-        shutil.rmtree(dest_path)
-    dest_path.mkdir(parents=True)
-    return dest_path
+def _reset_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
 
 
-def _execute_artifact_build(
-    uri: StepURI, dependencies: list[StepURI], dest_path: Path
-) -> dict[str, Any]:
-    command = _generate_build_command(uri, dependencies, dest_path)
-    if command[0].suffix != ".py":
-        raise ValueError(f"Artifact {uri} must be built by a Python script")
-
-    start_time = datetime.now()
-    runtime_info: dict[str, Any] = {
-        "start_time": start_time.isoformat(),
-        "status": "failed",
-    }
-
-    try:
-        command_s = [sys.executable] + [str(p.resolve()) for p in command]
-        subprocess.run(command_s, check=True)
-        runtime_info["status"] = "success"
-
-    except Exception as e:
-        runtime_info["error"] = str(e)
-        raise
-
-    finally:
-        end_time = datetime.now()
-        runtime_info["end_time"] = end_time.isoformat()
-        runtime_info["duration_seconds"] = round(
-            (end_time - start_time).total_seconds(), 2
-        )
-
-    print_op("CREATE", dest_path)
-    return runtime_info
+def _execute_artifact_build(command: list[Path]) -> dict[str, Any]:
+    command_s = [sys.executable] + [str(p.resolve()) for p in command]
+    return timed_run(lambda: subprocess.run(command_s, check=True))
 
 
-def _checksum_output(uri: StepURI, dest_path: Path) -> Manifest:
-    try:
-        return checksum_folder(dest_path)
-    except Exception:
-        shutil.rmtree(dest_path, ignore_errors=True)
+def _checksum_output(uri: StepURI, build_path: Path) -> Manifest:
+    if not any(p.is_file() for p in build_path.rglob("*")):
         raise ValueError(
-            f"Artifact step {uri} did not write any files into {dest_path}"
+            f"Artifact step {uri} did not write any files into {build_path}"
         )
 
-
-def _generate_input_manifest(uri: StepURI, dependencies: list[StepURI]) -> Manifest:
-    manifest = {}
-
-    # the script we used to generate the artifact
-    executable = _get_executable(uri)
-    manifest[str(executable)] = checksum_file(executable)
-
-    # every dependency's metadata file; it includes a checksum of the data,
-    # so this covers both data and metadata
-    for dep in dependencies:
-        dep_metadata_file = _metadata_path(dep)
-        manifest[str(dep_metadata_file)] = checksum_file(dep_metadata_file)
-
-    return manifest
+    return checksum_folder(build_path)

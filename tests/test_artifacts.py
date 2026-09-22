@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import jsonschema
 import polars as pl
 import pytest
@@ -46,11 +48,12 @@ pl.DataFrame({"dim_file": files}).write_parquet(out)
 """
 
 
-def write_script(script_dir, uri: StepURI, body: str) -> None:
+def write_script(script_dir, uri: StepURI, body: str) -> Path:
     path = (script_dir / uri.path).with_suffix(".py")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body)
     path.chmod(0o755)
+    return path
 
 
 def test_step_uri_artifact():
@@ -64,13 +67,26 @@ def test_alcove_schema_accepts_artifact_steps():
     config = {
         "version": 1,
         "steps": {
-            "snapshot://raw/latest": [],
-            "table://clean/latest": ["snapshot://raw/latest"],
+            "snapshot://raw/2024-09-04": [],
+            "table://clean/latest": ["snapshot://raw/2024-09-04"],
             "artifact://report/latest": ["table://clean/latest"],
-            "table://from_report/latest": ["artifact://report/latest"],
+            "artifact://report/2025-01-01": ["table://clean/latest"],
+            "table://from_report/latest": [
+                "artifact://report/latest",
+                "artifact://report/2025-01-01",
+            ],
         },
     }
     jsonschema.validate(config, ALCOVE_SCHEMA)
+
+
+def test_alcove_schema_rejects_hyphenated_names():
+    config = {
+        "version": 1,
+        "steps": {"table://clean/latest": ["snapshot://raw-data/latest"]},
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(config, ALCOVE_SCHEMA)
 
 
 def test_build_artifact_without_deps(setup_test_environment):
@@ -97,7 +113,36 @@ def test_build_artifact_that_writes_nothing_fails(setup_test_environment):
         build_artifact(uri, [])
 
     assert not artifact_path(uri).exists()
+    assert not list(ARTIFACT_DIR.rglob("*.building"))
     assert not is_completed(uri)
+
+
+def test_failed_rebuild_keeps_previous_artifact(setup_test_environment):
+    uri = StepURI.parse("artifact://report/latest")
+    write_script(ARTIFACT_SCRIPT_DIR, uri, WRITE_INDEX)
+    build_artifact(uri, [])
+
+    # the script now crashes after writing a partial output
+    write_script(ARTIFACT_SCRIPT_DIR, uri, WRITE_INDEX + "\nraise SystemExit(1)\n")
+    with pytest.raises(Exception):
+        build_artifact(uri, [])
+
+    assert (artifact_path(uri) / "index.html").read_text() == "<h1>hello</h1>"
+    assert not list(ARTIFACT_DIR.rglob("*.building"))
+    # but it is reported stale, since the script changed
+    assert not is_completed(uri)
+
+
+def test_missing_script_keeps_previous_artifact(setup_test_environment):
+    uri = StepURI.parse("artifact://report/latest")
+    script = write_script(ARTIFACT_SCRIPT_DIR, uri, WRITE_INDEX)
+    build_artifact(uri, [])
+
+    script.unlink()
+    with pytest.raises(FileNotFoundError, match="Python script"):
+        build_artifact(uri, [])
+
+    assert (artifact_path(uri) / "index.html").exists()
 
 
 def test_artifact_is_gitignored(setup_test_environment):
@@ -154,6 +199,27 @@ def test_table_can_depend_on_artifact(setup_test_environment):
 
     df = pl.read_parquet(TABLE_DIR / "listing/latest.parquet")
     assert df["dim_file"].to_list() == ["index.html"]
+
+
+def test_artifact_versions_are_passed_individually(setup_test_environment):
+    """Two versions of one artifact are not collapsed into a glob, since the
+    glob would also match their .meta.yaml sidecars."""
+    v1 = StepURI.parse("artifact://report/2025-01-01")
+    v2 = StepURI.parse("artifact://report/2025-02-01")
+    both = StepURI.parse("artifact://combined/latest")
+
+    alcove = Alcove.init()
+    alcove.new_artifact(v1.path, [])
+    alcove.new_artifact(v2.path, [])
+    alcove.new_artifact(both.path, [str(v1), str(v2)])
+    for uri in (v1, v2, both):
+        write_script(ARTIFACT_SCRIPT_DIR, uri, WRITE_INDEX)
+
+    plan_and_run(alcove)
+
+    out = artifact_path(both)
+    assert (out / "dep0.txt").read_text().endswith("report/2025-01-01")
+    assert (out / "dep1.txt").read_text().endswith("report/2025-02-01")
 
 
 def test_artifacts_are_not_tables(setup_test_environment):

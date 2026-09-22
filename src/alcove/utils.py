@@ -12,6 +12,9 @@ console = Console()
 
 IGNORE_FILES = {".DS_Store"}
 
+# build products under data/ that never enter git
+DATA_IGNORES: tuple[str, ...] = ("tables/", "artifacts/")
+
 
 def checksum_file(file_path: Union[str, Path]) -> Checksum:
     sha256 = hashlib.sha256()
@@ -79,8 +82,8 @@ def add_entry_to_file(file_path: Path, entry: str) -> None:
 
 def ensure_data_gitignore() -> None:
     """
-    Ensure that data/.gitignore exists with the tables/ entry.
-    Creates the file if it doesn't exist.
+    Ensure that data/.gitignore exists and ignores every build product
+    directory in DATA_IGNORES. Creates the file if it doesn't exist.
     """
     data_dir = Path("data")
     data_gitignore = data_dir / ".gitignore"
@@ -90,17 +93,12 @@ def ensure_data_gitignore() -> None:
         data_dir.mkdir(parents=True, exist_ok=True)
         print_op("CREATE", "data/")
 
-    # Create data/.gitignore if it doesn't exist with the tables/ entry
     if not data_gitignore.exists():
-        data_gitignore.write_text("tables/\n")
+        data_gitignore.write_text("".join(f"{e}\n" for e in DATA_IGNORES))
         print_op("CREATE", "data/.gitignore")
     else:
-        # Make sure tables/ is in data/.gitignore
-        with open(data_gitignore) as f:
-            entries = set(line.strip() for line in f if line.strip())
-
-        if "tables/" not in entries:
-            add_entry_to_file(data_gitignore, "tables/")
+        for entry in DATA_IGNORES:
+            add_entry_to_file(data_gitignore, entry)
 
 
 def add_to_data_gitignore(path: Path) -> None:

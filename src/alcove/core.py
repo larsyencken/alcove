@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 import jsonschema
 
@@ -60,21 +61,22 @@ class Alcove:
         jsonschema.validate(config, ALCOVE_SCHEMA)
         save_yaml(config, self.config_file)
 
-    def new_table(self, table_path: str, dependencies: list[str]) -> None:
-        table_uri = StepURI("table", table_path)
-        if table_uri in self.steps:
-            raise ValueError(f"Table already exists in alcove: {table_uri}")
+    def new_step(
+        self, scheme: Literal["table", "artifact"], path: str, dependencies: list[str]
+    ) -> None:
+        "Register a derived step and its dependencies in alcove.yaml."
+        uri = StepURI(scheme, path)
+        if uri in self.steps:
+            raise ValueError(f"{scheme.capitalize()} already exists in alcove: {uri}")
 
-        self.steps[table_uri] = [StepURI.parse(dep) for dep in dependencies]
+        self.steps[uri] = [StepURI.parse(dep) for dep in dependencies]
         self.save()
+
+    def new_table(self, table_path: str, dependencies: list[str]) -> None:
+        self.new_step("table", table_path, dependencies)
 
     def new_artifact(self, artifact_path: str, dependencies: list[str]) -> None:
-        artifact_uri = StepURI("artifact", artifact_path)
-        if artifact_uri in self.steps:
-            raise ValueError(f"Artifact already exists in alcove: {artifact_uri}")
-
-        self.steps[artifact_uri] = [StepURI.parse(dep) for dep in dependencies]
-        self.save()
+        self.new_step("artifact", artifact_path, dependencies)
 
     def get_latest_version(self, step: StepURI) -> StepURI:
         assert step.path.endswith("/latest")

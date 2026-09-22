@@ -66,11 +66,9 @@ def test_gitignore_existing_entry():
             # Try to add the same entry
             add_to_gitignore(entry_path)
 
-            # Check no duplicate was added
+            # Check no duplicate was added; the missing artifacts/ entry is filled in
             content = data_gitignore_path.read_text().strip().split("\n")
-            assert len(content) == 2
-            assert "tables/" in content
-            assert "existing/entry" in content
+            assert sorted(content) == ["artifacts/", "existing/entry", "tables/"]
 
 
 def test_ensure_data_gitignore():
@@ -88,13 +86,13 @@ def test_ensure_data_gitignore():
         assert data_dir.exists()
         assert data_gitignore_path.exists()
 
-        content = data_gitignore_path.read_text().strip()
-        assert content == "tables/"
+        content = data_gitignore_path.read_text().split()
+        assert content == ["tables/", "artifacts/"]
 
         # Test idempotence - calling again shouldn't add duplicate
         ensure_data_gitignore()
-        content = data_gitignore_path.read_text().strip()
-        assert content == "tables/"
+        content = data_gitignore_path.read_text().split()
+        assert content == ["tables/", "artifacts/"]
 
 
 def test_add_to_data_gitignore():
@@ -159,6 +157,7 @@ def test_audit_gitignore_setup():
 
         data_gitignore_content = data_gitignore_path.read_text().strip().split("\n")
         assert "tables/" in data_gitignore_content
+        assert "artifacts/" in data_gitignore_content
         assert "snapshots/test/path" in data_gitignore_content
         assert "snapshots/another/path" in data_gitignore_content
 

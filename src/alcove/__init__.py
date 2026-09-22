@@ -24,7 +24,7 @@ from alcove.db import (
 from alcove.exceptions import StepDefinitionError
 from alcove.snapshots import Snapshot
 from alcove.types import StepURI
-from alcove.utils import checksum_manifest, console
+from alcove.utils import DATA_IGNORES, checksum_manifest, console
 
 load_dotenv()
 
@@ -423,8 +423,8 @@ def check_data_gitignore_exists(fix: bool = False) -> None:
     if not gitignore_path.exists():
         if fix:
             print_op("CREATE", "data/.gitignore")
-            # Always ignore 'tables/' in data/.gitignore
-            gitignore_path.write_text("tables/\n")
+            # Always ignore build products in data/.gitignore
+            gitignore_path.write_text("".join(f"{e}\n" for e in DATA_IGNORES))
         else:
             print("WARNING: data/.gitignore doesn't exist")
 
@@ -498,22 +498,16 @@ def migrate_data_patterns_to_data_gitignore(fix: bool = False) -> None:
                         line.strip() for line in f if line.strip()
                     )
             else:
-                data_gitignore_entries = set()
-                # Always ensure "tables/" is included
-                data_gitignore_entries.add("tables/")
+                data_gitignore_entries = set(DATA_IGNORES)
 
             # First get list of all entries, preserving previous entries
-            all_entries = set(["tables/"])  # Always include tables/
-            for entry in data_gitignore_entries:
-                if entry != "tables/":
-                    all_entries.add(entry)
+            all_entries = set(DATA_IGNORES)
+            all_entries.update(data_gitignore_entries)
 
             # Add migrated entries from .gitignore
             for pattern in data_patterns:
                 if pattern.startswith("data/"):
-                    pattern_without_prefix = pattern[5:]  # Remove "data/" prefix
-                    if pattern_without_prefix != "tables/":
-                        all_entries.add(pattern_without_prefix)
+                    all_entries.add(pattern[5:])  # Remove "data/" prefix
 
             # Add new entries to data/.gitignore, removing the "data/" prefix
             with data_gitignore.open("w") as f:
@@ -581,27 +575,21 @@ def audit_gitignore_setup(fix: bool = False) -> None:
                         line.strip() for line in f if line.strip()
                     )
             else:
-                data_gitignore_entries = set()
-                # Always ensure "tables/" is included
-                data_gitignore_entries.add("tables/")
+                data_gitignore_entries = set(DATA_IGNORES)
 
             # Read entries from .data-files
             with open(old_data_files) as f:
                 data_files_entries = [line.strip() for line in f if line.strip()]
 
             # First get list of all entries, preserving previous entries too
-            all_entries = set(["tables/"])  # Always include tables/
-            for entry in data_gitignore_entries:
-                if entry != "tables/":
-                    all_entries.add(entry)
+            all_entries = set(DATA_IGNORES)
+            all_entries.update(data_gitignore_entries)
 
             # Add migrated entries from .data-files
             for entry in data_files_entries:
                 if entry.startswith("data/"):
-                    entry_without_prefix = entry[5:]  # Remove "data/" prefix
-                    if entry_without_prefix != "tables/":
-                        all_entries.add(entry_without_prefix)
-                elif entry != "tables/":
+                    all_entries.add(entry[5:])  # Remove "data/" prefix
+                else:
                     all_entries.add(entry)
 
             # Write data/.gitignore with all entries
@@ -651,12 +639,7 @@ def audit_step(step: StepURI, fix: bool = False) -> None:
 def new_table(
     alcove: Alcove, table_path: str, dependencies: list[str], edit: bool = False
 ) -> None:
-    table_uri = StepURI("table", table_path)
-    if table_uri in alcove.steps:
-        raise ValueError(f"Table already exists in alcove: {table_uri}")
-
-    alcove.steps[table_uri] = [StepURI.parse(dep) for dep in dependencies]
-    alcove.save()
+    alcove.new_table(table_path, dependencies)
 
 
 def execute_query(

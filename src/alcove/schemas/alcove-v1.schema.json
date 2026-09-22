@@ -5,15 +5,16 @@
   "definitions": {
     "dependency": {
       "type": "string",
+      "description": "Name segments use underscores; only the final version segment may contain hyphens, for ISO dates.",
       "oneOf": [
         {
-          "pattern": "^snapshot://[a-z0-9_/*]+$"
+          "pattern": "^snapshot://([a-z0-9_*]+/)*[a-z0-9_*-]+$"
         },
         {
-          "pattern": "^table://[a-z0-9_/*]+$"
+          "pattern": "^table://([a-z0-9_*]+/)*[a-z0-9_*-]+$"
         },
         {
-          "pattern": "^artifact://[a-z0-9_/*]+$"
+          "pattern": "^artifact://([a-z0-9_*]+/)*[a-z0-9_*-]+$"
         }
       ]
     }
