@@ -120,7 +120,9 @@ def _reset_dir(path: Path) -> None:
 
 
 def _execute_artifact_build(command: list[Path]) -> dict[str, Any]:
-    command_s = [sys.executable] + [str(p.resolve()) for p in command]
+    # -B: a step runs once per build, so bytecode caching buys nothing and a
+    # stale __pycache__ could shadow an edited module in a step folder
+    command_s = [sys.executable, "-B"] + [str(p.resolve()) for p in command]
     return timed_run(lambda: subprocess.run(command_s, check=True))
 
 

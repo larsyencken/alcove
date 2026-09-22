@@ -205,7 +205,9 @@ def _exec_python_command(uri: StepURI, command: list[Path]) -> None:
     output_file = command[-1]
     is_update = output_file.exists()
 
-    command_s = [sys.executable] + [str(p.resolve()) for p in command]
+    # -B: a step runs once per build, so bytecode caching buys nothing and a
+    # stale __pycache__ could shadow an edited module in a step folder
+    command_s = [sys.executable, "-B"] + [str(p.resolve()) for p in command]
     subprocess.run(command_s, check=True)
 
     if is_update:
