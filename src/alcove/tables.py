@@ -3,7 +3,7 @@ import sys
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import duckdb
 import jsonschema
@@ -77,13 +77,8 @@ def _execute_table_build(
 ) -> dict[str, Any]:
     """Execute the table build and return runtime information."""
     command = _generate_build_command(uri, dependencies)
-    start_time = datetime.now()
-    runtime_info: dict[str, Any] = {
-        "start_time": start_time.isoformat(),
-        "status": "failed",
-    }
 
-    try:
+    def build() -> None:
         if command[0].suffix == ".sql":
             _exec_sql_command(uri, command)
         else:
@@ -94,6 +89,19 @@ def _execute_table_build(
                 f"Table step {uri} did not generate the expected {dest_path}"
             )
 
+    return timed_run(build)
+
+
+def timed_run(fn: Callable[[], object]) -> dict[str, Any]:
+    """Run a build, returning the `execution` record shared by every step type."""
+    start_time = datetime.now()
+    runtime_info: dict[str, Any] = {
+        "start_time": start_time.isoformat(),
+        "status": "failed",
+    }
+
+    try:
+        fn()
         runtime_info["status"] = "success"
 
     except Exception as e:
@@ -104,8 +112,7 @@ def _execute_table_build(
         end_time = datetime.now()
         runtime_info["end_time"] = end_time.isoformat()
         runtime_info["duration_seconds"] = round(
-            (end_time - start_time).total_seconds(),
-            2,  # type: ignore
+            (end_time - start_time).total_seconds(), 2
         )
 
     return runtime_info
@@ -135,12 +142,14 @@ def _generate_build_command(
 
     # When multiple deps share the same scheme + base_path (1:n wildcard
     # expansion), collapse them into a single glob path instead of passing
-    # each version individually.
+    # each version individually. Artifacts are passed one directory at a
+    # time: a glob over their parent would also match the .meta.yaml
+    # sidecars that sit beside each version's directory.
     group_counts = Counter(f"{d.scheme}://{d.base_path}" for d in dependencies)
     added_globs: set[str] = set()
     for dep in dependencies:
         group_key = f"{dep.scheme}://{dep.base_path}"
-        if group_counts[group_key] > 1:
+        if group_counts[group_key] > 1 and dep.scheme != "artifact":
             if group_key not in added_globs:
                 cmd.append(_dependency_glob_path(dep))
                 added_globs.add(group_key)
@@ -176,11 +185,9 @@ def _dependency_glob_path(uri: StepURI) -> Path:
     elif uri.scheme == "table":
         return TABLE_DIR / uri.base_path / "*.parquet"
 
-    elif uri.scheme == "artifact":
-        return ARTIFACT_DIR / uri.base_path / "*"
-
     else:
-        raise ValueError(f"Unknown scheme {uri.scheme}")
+        # artifacts are never collapsed into a glob, see _generate_build_command
+        raise ValueError(f"No glob path for scheme {uri.scheme}")
 
 
 def _exec_python_command(uri: StepURI, command: list[Path]) -> None:

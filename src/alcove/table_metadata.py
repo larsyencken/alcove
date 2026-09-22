@@ -250,7 +250,12 @@ def _get_executable(uri: StepURI, check: bool = True) -> Path:
 
             return script
 
-    raise FileNotFoundError(f"Could not find script for {uri}")
+    hint = (
+        " (artifacts must be built by a Python script)"
+        if uri.scheme == "artifact"
+        else ""
+    )
+    raise FileNotFoundError(f"Could not find script for {uri}{hint}")
 
 
 def _is_valid_script(script: Path) -> bool:
