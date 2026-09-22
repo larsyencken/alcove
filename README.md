@@ -321,7 +321,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
-- `dev`
+- `0.4.0` (2026-09-22)
   - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
   - Added `alcove new-artifact <path> [deps...]`
   - Steps can be folders with a `__main__.py` entrypoint; every file in the folder (following symlinks, skipping caches and editor debris) is checksummed as an input, so templates and helper modules trigger rebuilds, and step scripts run with bytecode caching disabled

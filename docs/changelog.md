@@ -1,13 +1,17 @@
 # Changelog
 
-- `dev`
+- `0.4.0` (2026-09-22)
     - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
     - Added `alcove new-artifact <path> [deps...]`
     - Steps can be folders with a `__main__.py` entrypoint; every file in the folder (following symlinks, skipping caches and editor debris) is checksummed as an input, so templates and helper modules trigger rebuilds, and step scripts run with bytecode caching disabled
     - Fixed config validation rejecting ISO-date versions (e.g. `snapshot://foo/2024-09-04`) as dependencies; hyphens are now allowed in the version segment only
+
+- `0.3.0`
     - Added wildcard `*` support in step URIs for date-partitioned tables (e.g. `table://foo/*` expands per snapshot version)
     - `AlcoveDB` now registers union views across all partitions of a wildcard group
     - Fixed DAG mutation bug in `plan_and_run` (steps dict is now copied before modification)
+    - Table names now require underscores instead of dashes
+    - Added documentation site with Zensical
 
 - `0.2.2`
     - Fixed `snapshot --force` failing with `FileExistsError` when overwriting directory snapshots
