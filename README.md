@@ -248,7 +248,9 @@ src/steps/artifacts/reports/health/latest/
 └── template.html    # read relative to __file__
 ```
 
-A single `<path>.py` or `<path>.sql` file takes precedence over a folder at the same path.
+A single `<path>.py` or `<path>.sql` file takes precedence over a folder at the same path, and the folder takes precedence over a version-shared `<parent>.py`. The optional metadata config for a folder step sits beside it as `<path>.meta.yaml`, exactly as for a single-file step.
+
+What counts as part of the folder: every regular file, following symlinked directories, so a template shared between steps through a symlink is still an input. Dangling symlinks are an error. Ignored: `__pycache__`, anything starting with a dot (editor swap files, `.ruff_cache`, `.DS_Store`), and editor backups ending in `~` or wrapped in `#`. Step scripts run with bytecode caching disabled and redirected, so a `__pycache__` left inside the folder by running the script by hand is neither read nor written.
 
 ### Executing SQL step definitions
 
@@ -322,7 +324,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 - `dev`
   - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
   - Added `alcove new-artifact <path> [deps...]`
-  - Steps can be folders with a `__main__.py` entrypoint; every file in the folder is checksummed as an input, so templates and helper modules trigger rebuilds
+  - Steps can be folders with a `__main__.py` entrypoint; every file in the folder (following symlinks, skipping caches and editor debris) is checksummed as an input, so templates and helper modules trigger rebuilds, and step scripts run with bytecode caching disabled
   - Fixed config validation rejecting ISO-date versions (e.g. `snapshot://foo/2024-09-04`) as dependencies; hyphens are now allowed in the version segment only
 
 - `0.3.0`

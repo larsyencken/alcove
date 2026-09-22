@@ -15,8 +15,6 @@ any of those inputs change.
 """
 
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +27,7 @@ from alcove.tables import (
     _generate_build_command,
     _generate_input_manifest,
     _inputs_unchanged,
+    run_python_step,
     timed_run,
 )
 from alcove.types import Manifest, StepURI
@@ -120,10 +119,7 @@ def _reset_dir(path: Path) -> None:
 
 
 def _execute_artifact_build(command: list[Path]) -> dict[str, Any]:
-    # -B: a step runs once per build, so bytecode caching buys nothing and a
-    # stale __pycache__ could shadow an edited module in a step folder
-    command_s = [sys.executable, "-B"] + [str(p.resolve()) for p in command]
-    return timed_run(lambda: subprocess.run(command_s, check=True))
+    return timed_run(lambda: run_python_step(command))
 
 
 def _checksum_output(uri: StepURI, build_path: Path) -> Manifest:
