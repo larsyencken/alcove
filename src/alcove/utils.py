@@ -26,7 +26,9 @@ def checksum_file(file_path: Union[str, Path]) -> Checksum:
     return sha256.hexdigest()
 
 
-def checksum_folder(dir_path: Path) -> Manifest:
+def checksum_folder(
+    dir_path: Path, ignore_dirs: frozenset[str] = frozenset()
+) -> Manifest:
     manifest = {}
     # walk the subdirectory tree, adding relative path and checksums to the manifest
     for file_path in dir_path.rglob("*"):
@@ -34,6 +36,8 @@ def checksum_folder(dir_path: Path) -> Manifest:
             if file_path.name in IGNORE_FILES:
                 continue
             rel_path = file_path.relative_to(dir_path)
+            if ignore_dirs.intersection(rel_path.parts[:-1]):
+                continue
             manifest[str(rel_path)] = checksum_file(file_path)
 
     if not manifest:

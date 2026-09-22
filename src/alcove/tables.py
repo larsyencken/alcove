@@ -17,6 +17,7 @@ from alcove.table_metadata import (
     _get_executable,
     _metadata_path,
     process_table_metadata,
+    script_manifest,
 )
 from alcove.types import Manifest, StepURI
 from alcove.utils import checksum_file, load_yaml, print_op, save_yaml
@@ -44,9 +45,19 @@ def is_completed(uri: StepURI, deps: list[StepURI]) -> bool:
         if checksum_file(config_path) != input_manifest[str(config_path)]:
             return False
 
-    # Check script and dependency checksums
+    return _inputs_unchanged(uri, input_manifest)
+
+
+def _inputs_unchanged(uri: StepURI, input_manifest: Manifest) -> bool:
+    """Every recorded input still has the same checksum, and the step's script
+    has not grown any files since (a step folder may gain a template or module
+    that the recorded manifest never saw)."""
     for path, checksum in input_manifest.items():
         if not Path(path).exists() or checksum != checksum_file(path):
+            return False
+
+    for path in script_manifest(uri):
+        if path not in input_manifest:
             return False
 
     return True
@@ -316,9 +327,8 @@ def _gen_metadata(uri: StepURI, dependencies: list[StepURI]) -> None:
 def _generate_input_manifest(uri: StepURI, dependencies: list[StepURI]) -> Manifest:
     manifest = {}
 
-    # add the script we used to generate the table
-    executable = _get_executable(uri)
-    manifest[str(executable)] = checksum_file(executable)
+    # add the script (or step folder) we used to generate the table
+    manifest.update(script_manifest(uri))
 
     # add every dependency's metadata file; that file includes a checksum of its data,
     # so we cover both data and metadata this way
