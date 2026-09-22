@@ -18,8 +18,8 @@ from alcove.paths import (
     TABLE_SCRIPT_DIR,
 )
 from alcove.schemas import TABLE_CONFIG_SCHEMA
-from alcove.types import StepURI
-from alcove.utils import checksum_file, load_yaml, save_yaml
+from alcove.types import Manifest, StepURI
+from alcove.utils import checksum_file, checksum_folder, load_yaml, save_yaml
 
 console = Console()
 
@@ -165,9 +165,8 @@ class TableMetadata:
         """Generate the input manifest including script and dependency metadata."""
         manifest = {}
 
-        # Add the script we used to generate the table
-        executable = _get_executable(self.uri)
-        manifest[str(executable)] = checksum_file(executable)
+        # Add the script (or step folder) we used to generate the table
+        manifest.update(script_manifest(self.uri))
 
         # Add the metadata config if it exists
         config_path = self._get_config_path()
@@ -233,7 +232,20 @@ def _script_dir(uri: StepURI) -> Path:
     raise ValueError(f"Scheme {uri.scheme} has no build scripts")
 
 
+# directories inside a step folder that never count as part of the step
+SCRIPT_IGNORE_DIRS = frozenset({"__pycache__"})
+
+
 def _get_executable(uri: StepURI, check: bool = True) -> Path:
+    """Find what builds a step.
+
+    In order of precedence: a `<path>.py` or `<path>.sql` script, a step
+    folder `<path>/` holding a `__main__.py` entrypoint (Python runs the
+    folder), or a `<parent>.py` / `<parent>.sql` script shared across every
+    version of the step. A step folder can carry other files beside the
+    entrypoint, such as templates or lookup data, and the whole folder counts
+    as the step's input.
+    """
     base = _script_dir(uri) / uri.path
 
     # artifacts are built by Python only; SQL steps always produce a table
@@ -250,12 +262,30 @@ def _get_executable(uri: StepURI, check: bool = True) -> Path:
 
             return script
 
+        if exec_base == base and (base / "__main__.py").is_file():
+            return base
+
     hint = (
         " (artifacts must be built by a Python script)"
         if uri.scheme == "artifact"
         else ""
     )
     raise FileNotFoundError(f"Could not find script for {uri}{hint}")
+
+
+def script_manifest(uri: StepURI) -> Manifest:
+    """Checksums of the files that make up a step's build script: the single
+    script file, or every file in a step folder."""
+    executable = _get_executable(uri)
+    if executable.is_dir():
+        return {
+            str(executable / rel_path): checksum
+            for rel_path, checksum in checksum_folder(
+                executable, ignore_dirs=SCRIPT_IGNORE_DIRS
+            ).items()
+        }
+
+    return {str(executable): checksum_file(executable)}
 
 
 def _is_valid_script(script: Path) -> bool:

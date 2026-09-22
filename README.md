@@ -238,6 +238,18 @@ daily = pl.read_parquet(deps[0])
 
 The output lands in `data/artifacts/<artifact-path>/`, with a `.meta.yaml` sidecar recording a checksum of every file produced and of every input. Artifacts rebuild when any dependency or the script changes, can depend on snapshots, tables and other artifacts, and can be depended on by tables in turn. Artifact scripts must be Python; they do not appear in `alcove db`.
 
+### Steps as folders
+
+A step can be a folder instead of a single file. Put a `__main__.py` entrypoint in `src/steps/tables/<path>/` (or `src/steps/artifacts/<path>/`) and alcove runs the folder with Python, exactly as `python <folder>` would. Anything else in the folder, such as a helper module, a lookup CSV or an HTML template, is part of the step: every file is checksummed into the step's input manifest, so editing, adding or removing one rebuilds the step. Bytecode caches (`__pycache__`) are ignored.
+
+```
+src/steps/artifacts/reports/health/latest/
+├── __main__.py      # reads sys.argv, writes into the output directory
+└── template.html    # read relative to __file__
+```
+
+A single `<path>.py` or `<path>.sql` file takes precedence over a folder at the same path.
+
 ### Executing SQL step definitions
 
 If a `.sql` step definition is detected, it will be executed using DuckDB with an in-memory database. The SQL file can use `{variable}` to interpolate template variables. The following template variables are available:
@@ -310,6 +322,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 - `dev`
   - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
   - Added `alcove new-artifact <path> [deps...]`
+  - Steps can be folders with a `__main__.py` entrypoint; every file in the folder is checksummed as an input, so templates and helper modules trigger rebuilds
   - Fixed config validation rejecting ISO-date versions (e.g. `snapshot://foo/2024-09-04`) as dependencies; hyphens are now allowed in the version segment only
 
 - `0.3.0`

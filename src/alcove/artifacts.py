@@ -25,10 +25,14 @@ import jsonschema
 from alcove.paths import ARTIFACT_DIR
 from alcove.schemas import ARTIFACT_SCHEMA
 from alcove.table_metadata import _metadata_path
-from alcove.tables import _generate_build_command, _generate_input_manifest, timed_run
+from alcove.tables import (
+    _generate_build_command,
+    _generate_input_manifest,
+    _inputs_unchanged,
+    timed_run,
+)
 from alcove.types import Manifest, StepURI
 from alcove.utils import (
-    checksum_file,
     checksum_folder,
     checksum_manifest,
     ensure_data_gitignore,
@@ -61,11 +65,7 @@ def is_completed(uri: StepURI) -> bool:
             return False
 
     # and every input it was built from must be unchanged
-    for path, checksum in metadata["input_manifest"].items():
-        if not Path(path).exists() or checksum != checksum_file(path):
-            return False
-
-    return True
+    return _inputs_unchanged(uri, metadata["input_manifest"])
 
 
 def build_artifact(uri: StepURI, dependencies: list[StepURI]) -> None:
