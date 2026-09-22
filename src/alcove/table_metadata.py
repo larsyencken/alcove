@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 import jsonschema
 import polars as pl
@@ -19,7 +19,7 @@ from alcove.paths import (
 )
 from alcove.schemas import TABLE_CONFIG_SCHEMA
 from alcove.types import Manifest, StepURI
-from alcove.utils import checksum_file, checksum_folder, load_yaml, save_yaml
+from alcove.utils import checksum_file, load_yaml, save_yaml
 
 console = Console()
 
@@ -232,8 +232,44 @@ def _script_dir(uri: StepURI) -> Path:
     raise ValueError(f"Scheme {uri.scheme} has no build scripts")
 
 
-# directories inside a step folder that never count as part of the step
-SCRIPT_IGNORE_DIRS = frozenset({"__pycache__"})
+def _is_step_debris(name: str) -> bool:
+    """Files and directories inside a step folder that are never part of the
+    step: bytecode caches, dotfiles and dot-directories (editor swap files,
+    tool caches such as .ruff_cache, .DS_Store), and editor backups."""
+    return (
+        name == "__pycache__"
+        or name.startswith(".")
+        or name.endswith("~")
+        or (name.startswith("#") and name.endswith("#"))
+    )
+
+
+def step_folder_files(folder: Path) -> Iterator[Path]:
+    """Every file that makes up a step folder, in a stable order.
+
+    Symlinked directories are followed, so a template shared between steps via
+    a symlink still counts as an input; a dangling symlink or a symlink cycle
+    is an error rather than a silent gap in the manifest.
+    """
+    seen: set[Path] = set()
+
+    def walk(directory: Path) -> Iterator[Path]:
+        real = directory.resolve()
+        if real in seen:
+            raise ValueError(f"Step folder {folder} has a symlink cycle at {directory}")
+        seen.add(real)
+
+        for entry in sorted(directory.iterdir()):
+            if _is_step_debris(entry.name):
+                continue
+            if not entry.exists():
+                raise FileNotFoundError(f"Dangling symlink in step folder: {entry}")
+            if entry.is_dir():
+                yield from walk(entry)
+            elif entry.is_file():
+                yield entry
+
+    yield from walk(folder)
 
 
 def _get_executable(uri: StepURI, check: bool = True) -> Path:
@@ -278,12 +314,7 @@ def script_manifest(uri: StepURI) -> Manifest:
     script file, or every file in a step folder."""
     executable = _get_executable(uri)
     if executable.is_dir():
-        return {
-            str(executable / rel_path): checksum
-            for rel_path, checksum in checksum_folder(
-                executable, ignore_dirs=SCRIPT_IGNORE_DIRS
-            ).items()
-        }
+        return {str(f): checksum_file(f) for f in step_folder_files(executable)}
 
     return {str(executable): checksum_file(executable)}
 

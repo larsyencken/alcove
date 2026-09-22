@@ -1,5 +1,7 @@
+import os
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -201,14 +203,25 @@ def _dependency_glob_path(uri: StepURI) -> Path:
         raise ValueError(f"No glob path for scheme {uri.scheme}")
 
 
+def run_python_step(command: list[Path]) -> None:
+    """Run a step's script (or step folder) with the alcove interpreter.
+
+    A step runs once per build, so bytecode caching buys nothing: -B stops
+    Python writing it, and PYTHONPYCACHEPREFIX points reads at a scratch tree
+    so a __pycache__ left inside a step folder by running the script by hand
+    can never shadow an edited module.
+    """
+    command_s = [sys.executable, "-B"] + [str(p.resolve()) for p in command]
+    env = dict(os.environ)
+    env["PYTHONPYCACHEPREFIX"] = str(Path(tempfile.gettempdir()) / "alcove-pycache")
+    subprocess.run(command_s, check=True, env=env)
+
+
 def _exec_python_command(uri: StepURI, command: list[Path]) -> None:
     output_file = command[-1]
     is_update = output_file.exists()
 
-    # -B: a step runs once per build, so bytecode caching buys nothing and a
-    # stale __pycache__ could shadow an edited module in a step folder
-    command_s = [sys.executable, "-B"] + [str(p.resolve()) for p in command]
-    subprocess.run(command_s, check=True)
+    run_python_step(command)
 
     if is_update:
         print_op("UPDATE", output_file)
