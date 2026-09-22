@@ -59,12 +59,15 @@ def test_table_folder_step(setup_test_environment):
     df = pl.read_parquet(TABLE_DIR / "numbers/latest.parquet")
     assert len(df) == 3
 
-    # every file in the folder is an input, the bytecode cache is not
-    assert (folder / "__pycache__").is_dir()
+    # alcove runs steps with -B, so no bytecode cache appears
+    assert not (folder / "__pycache__").exists()
     manifest = load_yaml(_metadata_path(uri))["input_manifest"]
-    assert str(folder / "__main__.py") in manifest
-    assert str(folder / "helpers.py") in manifest
-    assert not any("__pycache__" in path for path in manifest)
+    assert manifest.keys() >= {str(folder / "__main__.py"), str(folder / "helpers.py")}
+    assert outstanding(alcove) == set()
+
+    # a cache left behind by running the script by hand is not an input
+    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__" / "junk.cpython-312.pyc").write_bytes(b"\0")
     assert outstanding(alcove) == set()
 
     # editing a helper, not the entrypoint, dirties the step
