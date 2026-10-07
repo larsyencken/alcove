@@ -1,5 +1,6 @@
 import datetime
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -204,9 +205,7 @@ def test_one_gitignore_pattern_per_dataset(setup_test_environment):
 
     lines = Path("data/.gitignore").read_text().splitlines()
     assert lines.count("snapshots/gpu/usage/????-??-??/") == 1
-    assert lines.count("snapshots/gpu/usage/.orphaned/") == 1
     assert lines.count("snapshots/spend/levels/????-??-??.parquet") == 1
-    assert lines.count("snapshots/spend/levels/.orphaned/") == 1
     assert not any("2026-10" in line for line in lines)
 
     # the data is ignored, but the metadata that indexes it is not
@@ -216,7 +215,35 @@ def test_one_gitignore_pattern_per_dataset(setup_test_environment):
     assert git_ignored(levels / "2026-10-01.parquet")
     assert not git_ignored(usage / "2026-10-01.meta.yaml")
     assert not git_ignored(levels / "2026-10-01.meta.yaml")
-    assert git_ignored(usage / ".orphaned/2026-10-03/usage.parquet")
+
+
+def test_set_aside_data_stays_out_of_git(setup_test_environment):
+    "Even for a dataset moved over from explicitly listed versions."
+    subprocess.run(["git", "init", "-q"], check=True)
+    alcove = Alcove.init()
+    for day in ["2026-10-01", "2026-10-02"]:
+        snapshot_file_day(day)
+
+    # move it over, as the docs describe
+    alcove.refresh()
+    for day in ["2026-10-01", "2026-10-02"]:
+        del alcove.steps[StepURI.parse(f"snapshot://spend/levels/{day}")]
+    alcove.save()
+    declare(alcove, "snapshot://spend/levels/*")
+
+    (SNAPSHOT_DIR / "spend/levels/2026-10-02.meta.yaml").unlink()
+    plan_and_run(alcove)
+
+    set_aside = SNAPSHOT_DIR / "spend/levels" / ORPHANED_DIR / "2026-10-02.parquet"
+    assert set_aside.exists()
+    assert git_ignored(set_aside)
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert ORPHANED_DIR not in status
 
 
 # ── tables over partitions ───────────────────────────────────────────
@@ -487,6 +514,33 @@ def test_dropped_partition_on_another_clone(setup_test_environment):
     assert not set_aside.parent.exists()
     df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
     assert df.height == 3
+
+
+def test_restoring_tolerates_odd_set_aside_data(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    usage = SNAPSHOT_DIR / "gpu/usage"
+    snapshot_day("2026-10-01", 1.0)
+    snapshot_day("2026-10-02", 2.0)
+
+    # day 01 is set aside twice: first an empty folder, then its real data
+    meta = usage / "2026-10-01.meta.yaml"
+    meta_text = meta.read_text()
+    meta.unlink()
+    shutil.move(usage / "2026-10-01", Path("real"))
+    (usage / "2026-10-01").mkdir()
+    plan_and_run(alcove)
+    shutil.move(Path("real"), usage / "2026-10-01")
+    plan_and_run(alcove)
+    assert (usage / ORPHANED_DIR / "2026-10-01").is_dir()
+    assert (usage / ORPHANED_DIR / "2026-10-01~1/usage.parquet").exists()
+
+    # when the metadata comes back, the copy that matches is restored
+    meta.write_text(meta_text)
+    plan_and_run(alcove)
+    df = pl.read_parquet(usage / "2026-10-01/usage.parquet")
+    assert df["gpu_hours"].to_list() == [1.0]
+    assert not (usage / ORPHANED_DIR / "2026-10-01~1").exists()
 
 
 def test_set_aside_data_is_only_restored_if_it_matches(setup_test_environment):

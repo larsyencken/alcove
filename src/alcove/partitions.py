@@ -75,12 +75,11 @@ def partition_gitignore_entry(base_path: str, extension: str | None) -> str:
 
 # Where partition-shaped data with no metadata is moved, out of reach of the
 # dataset's glob, and where it is restored from if its metadata comes back.
+# It carries its own .gitignore, so git never sees what's in it.
 ORPHANED_DIR = ".orphaned"
 
-
-def orphaned_gitignore_entry(base_path: str) -> str:
-    "The data/.gitignore pattern for a partitioned dataset's set-aside data."
-    return f"{Path('snapshots') / base_path / ORPHANED_DIR}/"
+# `2026-01-02~1`: a second thing set aside under the same name
+_SET_ASIDE_COPY = re.compile(r"~\d+$")
 
 
 def tidy_orphans(
@@ -148,7 +147,7 @@ def tidy_orphans(
                     "WOULD SET ASIDE" if dry_run else "SET ASIDE", f"{path} -> {dest}"
                 )
                 if not dry_run:
-                    dest.parent.mkdir(exist_ok=True)
+                    _make_set_aside_dir(dest.parent)
                     shutil.move(path, dest)
             elif dry_run:
                 print_op("WOULD DELETE", path)
@@ -167,28 +166,43 @@ def _restore_set_aside(base_path: str, versions: set[str], dry_run: bool) -> Non
         return
 
     for path in sorted(set_aside.iterdir()):
-        version = _owning_version("snapshot", path)
+        name = _SET_ASIDE_COPY.sub("", path.name)
+        version = name[:10]
         if version not in versions:
             continue
 
         snapshot = Snapshot.load(f"{base_path}/{version}")
-        if snapshot.path.exists() or snapshot.path.name != path.name:
+        if snapshot.path.name != name or snapshot.path.exists():
+            continue
+        if snapshot.path.is_symlink():
+            # a dangling link where the data should be; leave it for fetch
             continue
 
         # only data that is exactly this partition's, or we'd lose it when the
         # partition is fetched over it
-        if snapshot.snapshot_type == "file":
-            matches = checksum_file(path) == snapshot.checksum
-        else:
-            matches = checksum_manifest(checksum_folder(path)) == snapshot.checksum
+        try:
+            if snapshot.snapshot_type == "file":
+                matches = checksum_file(path) == snapshot.checksum
+            else:
+                matches = checksum_manifest(checksum_folder(path)) == snapshot.checksum
+        except Exception:
+            # e.g. an empty folder or a dangling link: not this partition's data
+            matches = False
 
         if matches:
             print_op("WOULD RESTORE" if dry_run else "RESTORE", snapshot.path)
             if not dry_run:
                 shutil.move(path, snapshot.path)
 
-    if not dry_run and not any(set_aside.iterdir()):
-        set_aside.rmdir()
+    if not dry_run and all(p.name == ".gitignore" for p in set_aside.iterdir()):
+        shutil.rmtree(set_aside)
+
+
+def _make_set_aside_dir(path: Path) -> None:
+    path.mkdir(exist_ok=True)
+    ignore = path / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("*\n")
 
 
 def _free_path(path: Path) -> Path:

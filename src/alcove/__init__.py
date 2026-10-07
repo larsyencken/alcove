@@ -25,7 +25,6 @@ from alcove.exceptions import StepDefinitionError
 from alcove.partitions import (
     ORPHANED_DIR,
     is_partition_version,
-    orphaned_gitignore_entry,
     partition_gitignore_entry,
     tidy_orphans,
 )
@@ -317,7 +316,6 @@ def snapshot_to_alcove(
         add_pattern_to_data_gitignore(
             partition_gitignore_entry(proposed_uri.base_path, extension)
         )
-        add_pattern_to_data_gitignore(orphaned_gitignore_entry(proposed_uri.base_path))
     else:
         add_to_data_gitignore(snapshot.path)
 
