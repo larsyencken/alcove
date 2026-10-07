@@ -77,6 +77,7 @@ alcove.snapshot_to_alcove(Path("usage-2026-10-06"), "gpu/usage/2026-10-06")
 Each day is an ordinary snapshot, with these differences:
 
 - **It is named by a date, which you must give.** Use the date its data covers, or for a pull that covers a trailing window, the window's last day (its as-of date). The name must be a real ISO date (`YYYY-MM-DD`); alcove won't fill in today's date for you.
+- **Every day from the first partition to the last must have one.** A missing day almost always means a fetch failed, so `alcove run` stops and names the missing days rather than build tables that silently lack them. For a day with no data, snapshot an empty partition shaped like any other day: the same files, each with the schema and no rows, so that steps reading one day at a time can read it too. A backfill can snapshot days in any order, as long as it is complete before the next `alcove run`, here or on any clone it has been pushed to.
 - **Its metadata records when it was fetched** as `date_accessed`, since its name says which day it covers.
 - **It is not added to `alcove.yaml`.** Alcove discovers partitions from their metadata files, `data/snapshots/gpu/usage/<date>.meta.yaml`, which you commit. A daily job therefore adds one new file and edits nothing that another run might also be editing. A metadata file there that isn't named by a date is not a partition; `alcove audit` warns about it.
 - **One `data/.gitignore` pattern covers every partition**, e.g. `snapshots/gpu/usage/????-??-??/` for directories or `snapshots/gpu/usage/????-??-??.parquet` for single files. It matches the data but never the metadata.
@@ -84,11 +85,11 @@ Each day is an ordinary snapshot, with these differences:
 
 To revise a day, for example after late-arriving data, snapshot it again with `--force`.
 
-To drop a day, delete its `.meta.yaml` file and its data, and commit.
+Only the first or last day can be dropped: delete its `.meta.yaml` file and its data, and commit. To correct a day in the middle, revise it instead.
 
 #### Data with no metadata
 
-Data in a partitioned dataset's folder that is named like a partition but has no metadata isn't a partition, so tables must not read it. That happens on other clones after a day is dropped (the data was never in git), after checking out a branch that predates some days, after an interrupted snapshot, or when data is written into the folder before being snapshotted. Since it could be the only copy of something, `alcove run` doesn't delete it: it moves it into `data/snapshots/<dataset>/.orphaned/`, out of reach of the dataset's glob. That folder carries its own `.gitignore`, so git never picks it up. Anything already set aside under the same name is kept, as `<name>~1` and so on. If a partition with exactly that content gets its metadata back, for example when you check the newer branch out again, the next run moves it back rather than downloading it again. Delete `.orphaned/` whenever you no longer need what's in it.
+Data in a partitioned dataset's folder that is named like a partition but has no metadata isn't a partition, so tables must not read it. That happens on other clones after a day is dropped (the data was never in git), after checking out a branch that predates some days, after an interrupted snapshot, or when data is written into the folder before being snapshotted. If that leaves a day missing from the middle of the dataset, `alcove run` stops, as above, and leaves the data where it is; snapshotting it from there fills the gap. Otherwise, since it could be the only copy of something, `alcove run` doesn't delete it: it moves it into `data/snapshots/<dataset>/.orphaned/`, out of reach of the dataset's glob. That folder carries its own `.gitignore`, so git never picks it up. Anything already set aside under the same name is kept, as `<name>~1` and so on. If a partition with exactly that content gets its metadata back, for example when you check the newer branch out again, the next run moves it back rather than downloading it again. Delete `.orphaned/` whenever you no longer need what's in it.
 
 Tables and artifacts built for a day that's gone are build products, and `alcove run` deletes them. `alcove run --dry-run` shows what it would move or delete, and a run filtered to other steps (`alcove run <regex>`) leaves datasets it doesn't touch alone.
 
@@ -147,5 +148,5 @@ A declared dataset with no partitions yet expands to no steps, as do wildcard st
 
 ### Moving an existing dataset over
 
-If you already list a dataset's dated snapshots in `alcove.yaml`, add the `snapshot://<dataset>/*: []` declaration and delete the dated lines; their metadata files are already in place. Versions not named by a plain date, such as `2025-01-01-v2`, are not partitions and must stay listed explicitly. They behave as before, including being revised with `--force`.
+If you already list a dataset's dated snapshots in `alcove.yaml`, add the `snapshot://<dataset>/*: []` declaration and delete the dated lines; their metadata files are already in place. The dates must cover every day from the first to the last, so a dataset snapshotted weekly or monthly can't be moved over. Versions not named by a plain date, such as `2025-01-01-v2`, are not partitions and must stay listed explicitly. They behave as before, including being revised with `--force`.
 

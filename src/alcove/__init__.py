@@ -24,6 +24,7 @@ from alcove.db import (
 from alcove.exceptions import StepDefinitionError
 from alcove.partitions import (
     ORPHANED_DIR,
+    check_contiguous,
     is_partition_version,
     partition_gitignore_entry,
     tidy_orphans,
@@ -373,6 +374,10 @@ def plan_and_run(
 
     if regex:
         dag = steps.prune_with_regex(dag, regex)
+
+    # a day missing from the middle of a dataset would otherwise go
+    # unnoticed; stop before anything on disk is touched
+    check_contiguous(alcove.steps, scope=dag if regex else None)
 
     # files left by a dropped version would otherwise still match their
     # dataset's glob, here and on every other clone

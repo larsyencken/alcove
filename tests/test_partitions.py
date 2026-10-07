@@ -15,7 +15,7 @@ from alcove import (
 )
 from alcove.artifacts import artifact_path
 from alcove.core import Alcove
-from alcove.partitions import ORPHANED_DIR, tidy_orphans
+from alcove.partitions import ORPHANED_DIR, check_contiguous, tidy_orphans
 from alcove.paths import (
     ARTIFACT_DIR,
     ARTIFACT_SCRIPT_DIR,
@@ -293,16 +293,16 @@ def test_union_table_rebuilds_when_partition_removed(setup_test_environment):
         snapshot_day(day)
     plan_and_run(alcove)
 
-    # dropping a partition means deleting its metadata and its data
-    (SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml").unlink()
-    for f in (SNAPSHOT_DIR / "gpu/usage/2026-10-02").iterdir():
+    # dropping the newest partition means deleting its metadata and its data
+    (SNAPSHOT_DIR / "gpu/usage/2026-10-03.meta.yaml").unlink()
+    for f in (SNAPSHOT_DIR / "gpu/usage/2026-10-03").iterdir():
         f.unlink()
-    (SNAPSHOT_DIR / "gpu/usage/2026-10-02").rmdir()
+    (SNAPSHOT_DIR / "gpu/usage/2026-10-03").rmdir()
 
     assert "table://gpu/usage_all/latest" in dirty_steps(alcove)
     plan_and_run(alcove)
     df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
-    assert sorted(str(d) for d in df["day"]) == ["2026-10-01", "2026-10-03"]
+    assert sorted(str(d) for d in df["day"]) == ["2026-10-01", "2026-10-02"]
 
 
 def test_union_table_rebuilds_when_partition_revised(setup_test_environment):
@@ -481,24 +481,25 @@ def test_dropped_partition_on_another_clone(setup_test_environment):
         snapshot_day(day)
     plan_and_run(alcove)
 
-    # another machine drops a day, or we check out a branch from before it;
-    # either way only its metadata goes, since its data was never in git
-    meta = SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml"
+    # another machine drops the newest day, or we check out a branch from
+    # before it; either way only its metadata goes, since its data was never
+    # in git
+    meta = SNAPSHOT_DIR / "gpu/usage/2026-10-03.meta.yaml"
     meta_text = meta.read_text()
     meta.unlink()
     plan_and_run(alcove)
 
     # its data is set aside, not read and not deleted
-    set_aside = SNAPSHOT_DIR / "gpu/usage" / ORPHANED_DIR / "2026-10-02"
+    set_aside = SNAPSHOT_DIR / "gpu/usage" / ORPHANED_DIR / "2026-10-03"
     assert (set_aside / "usage.parquet").exists()
-    assert not (SNAPSHOT_DIR / "gpu/usage/2026-10-02").exists()
+    assert not (SNAPSHOT_DIR / "gpu/usage/2026-10-03").exists()
 
     # while what was built from it is deleted
-    assert not (TABLE_DIR / "gpu/clean/2026-10-02.parquet").exists()
-    assert not (TABLE_DIR / "gpu/clean/2026-10-02.meta.yaml").exists()
+    assert not (TABLE_DIR / "gpu/clean/2026-10-03.parquet").exists()
+    assert not (TABLE_DIR / "gpu/clean/2026-10-03.meta.yaml").exists()
 
     df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
-    assert sorted(str(d) for d in df["day"]) == ["2026-10-01", "2026-10-03"]
+    assert sorted(str(d) for d in df["day"]) == ["2026-10-01", "2026-10-02"]
     rollup = pl.read_parquet(TABLE_DIR / "gpu/rollup/latest.parquet")
     assert rollup["n"].to_list() == [2]
     with connect() as db:
@@ -510,7 +511,7 @@ def test_dropped_partition_on_another_clone(setup_test_environment):
     meta.write_text(meta_text)
     plan_and_run(alcove)
 
-    assert (SNAPSHOT_DIR / "gpu/usage/2026-10-02/usage.parquet").exists()
+    assert (SNAPSHOT_DIR / "gpu/usage/2026-10-03/usage.parquet").exists()
     assert not set_aside.parent.exists()
     df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
     assert df.height == 3
@@ -715,6 +716,133 @@ def test_audit_ignores_metadata_named_files_inside_snapshot_data(
 
     audit_alcove(Alcove())
     assert "WARNING" not in capsys.readouterr().out
+
+
+# ── a day missing from the middle ────────────────────────────────────
+
+
+def test_a_missing_day_stops_the_run(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(alcove, "table://gpu/usage_all/latest", ["snapshot://gpu/usage/*"])
+    declare(alcove, "table://other/latest")
+    write_sql("gpu/usage_all.sql", UNION_SQL)
+    write_sql("other.sql", "SELECT 1 AS x")
+    for day in ["2026-10-01", "2026-10-02", "2026-10-03"]:
+        snapshot_day(day)
+    plan_and_run(alcove)
+
+    # a day is dropped from the middle
+    meta = SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml"
+    meta_text = meta.read_text()
+    meta.unlink()
+
+    # the run stops before touching anything, dry or not
+    for dry_run in [True, False]:
+        with pytest.raises(
+            ValueError, match="usage/\\* is missing 1 day: 2026-10-02\n"
+        ):
+            plan_and_run(alcove, dry_run=dry_run)
+    assert (SNAPSHOT_DIR / "gpu/usage/2026-10-02/usage.parquet").exists()
+    df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
+    assert df.height == 3
+
+    # a run filtered to other steps carries on
+    plan_and_run(alcove, regex="other")
+
+    # and filling the gap fixes it
+    meta.write_text(meta_text)
+    plan_and_run(alcove)
+
+
+def test_gaps_are_named_as_ranges(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://spend/levels/*")
+
+    # a backfill can go in any order; only a run needs every day
+    for day in ["2026-10-08", "2026-10-01", "2026-10-07", "2026-10-03"]:
+        snapshot_file_day(day)
+
+    with pytest.raises(
+        ValueError, match="is missing 4 days: 2026-10-02, 2026-10-04 to 2026-10-06\n"
+    ):
+        plan_and_run(alcove)
+
+    for day in ["2026-10-02", "2026-10-04", "2026-10-05", "2026-10-06"]:
+        snapshot_file_day(day)
+    plan_and_run(alcove)
+
+
+def test_a_missing_day_can_be_snapshotted_where_its_data_is(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    for day in ["2026-10-01", "2026-10-03"]:
+        snapshot_day(day)
+
+    # day 02's data was written straight into the dataset's folder
+    day = SNAPSHOT_DIR / "gpu/usage/2026-10-02"
+    day.mkdir()
+    pl.DataFrame({"namespace": ["u-a"], "gpu_hours": [2.0]}).write_parquet(
+        day / "usage.parquet"
+    )
+    with pytest.raises(ValueError, match="missing 1 day: 2026-10-02\n"):
+        plan_and_run(alcove)
+
+    snapshot_to_alcove(day, "gpu/usage/2026-10-02")
+    assert Snapshot.load("gpu/usage/2026-10-02").is_up_to_date()
+    plan_and_run(alcove)
+
+    # and revised in place when late data arrives
+    pl.DataFrame({"namespace": ["u-b"], "gpu_hours": [3.0]}).write_parquet(
+        day / "late.parquet"
+    )
+    snapshot_to_alcove(day, "gpu/usage/2026-10-02", force=True)
+    assert sorted(p.name for p in day.iterdir()) == ["late.parquet", "usage.parquet"]
+    assert Snapshot.load("gpu/usage/2026-10-02").is_up_to_date()
+
+
+def test_a_symlinked_partition_is_not_snapshotted_in_place(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    elsewhere = Path("elsewhere").resolve()
+    elsewhere.mkdir()
+    pl.DataFrame({"namespace": ["u-a"], "gpu_hours": [1.0]}).write_parquet(
+        elsewhere / "usage.parquet"
+    )
+    day = SNAPSHOT_DIR / "gpu/usage/2026-10-01"
+    day.parent.mkdir(parents=True)
+    day.symlink_to(elsewhere)
+
+    # it would stay a link, and fetching it later would write through it
+    with pytest.raises(OSError):
+        snapshot_to_alcove(elsewhere, "gpu/usage/2026-10-01")
+    assert (elsewhere / "usage.parquet").exists()
+
+
+def test_only_partitions_of_declared_datasets_must_be_contiguous():
+    S = StepURI.parse
+    declared = {
+        S("snapshot://a/*"): [],
+        **{S(f"snapshot://a/2026-01-{d:02}"): [] for d in range(1, 30, 2)},
+        # a listed version not named by a plain date is not a partition
+        S("snapshot://b/*"): [],
+        S("snapshot://b/2026-01-01"): [],
+        S("snapshot://b/2026-01-02"): [],
+        S("snapshot://b/2026-03-01-v2"): [],
+        # nor are versions of a dataset that isn't declared partitioned
+        S("snapshot://monthly/2026-01-01"): [],
+        S("snapshot://monthly/2026-02-01"): [],
+    }
+
+    with pytest.raises(ValueError) as exc:
+        check_contiguous(declared)
+    assert str(exc.value).splitlines()[1:-1] == [
+        "  snapshot://a/* is missing 14 days: 2026-01-02, 2026-01-04, "
+        "2026-01-06, 2026-01-08, 2026-01-10, and 9 more gaps"
+    ]
+
+    # a run filtered to other datasets doesn't check this one
+    check_contiguous(declared, scope={S("snapshot://b/2026-01-01"): []})
 
 
 # ── empty and lagging partitioned inputs ─────────────────────────────

@@ -97,8 +97,16 @@ class Snapshot:
     ) -> "Snapshot":
         data_path = SNAPSHOT_DIR / dataset_name
 
-        # copy directory to data/snapshots/...
-        copy_dir(local_path, data_path)
+        # copy directory to data/snapshots/..., unless that's where it already
+        # is: copying would delete it first. A symlink there is still replaced
+        # (which fails), or fetching would later write through it.
+        in_place = (
+            data_path.exists()
+            and not data_path.is_symlink()
+            and data_path.samefile(local_path)
+        )
+        if not in_place:
+            copy_dir(local_path, data_path)
 
         # upload to s3
         manifest = add_directory_to_s3(data_path)
