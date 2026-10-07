@@ -1,6 +1,5 @@
 import datetime
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -15,7 +14,7 @@ from alcove import (
 )
 from alcove.artifacts import artifact_path
 from alcove.core import Alcove
-from alcove.partitions import OrphanedDataError, remove_orphans
+from alcove.partitions import ORPHANED_DIR, tidy_orphans
 from alcove.paths import (
     ARTIFACT_DIR,
     ARTIFACT_SCRIPT_DIR,
@@ -205,7 +204,9 @@ def test_one_gitignore_pattern_per_dataset(setup_test_environment):
 
     lines = Path("data/.gitignore").read_text().splitlines()
     assert lines.count("snapshots/gpu/usage/????-??-??/") == 1
+    assert lines.count("snapshots/gpu/usage/.orphaned/") == 1
     assert lines.count("snapshots/spend/levels/????-??-??.parquet") == 1
+    assert lines.count("snapshots/spend/levels/.orphaned/") == 1
     assert not any("2026-10" in line for line in lines)
 
     # the data is ignored, but the metadata that indexes it is not
@@ -215,6 +216,7 @@ def test_one_gitignore_pattern_per_dataset(setup_test_environment):
     assert git_ignored(levels / "2026-10-01.parquet")
     assert not git_ignored(usage / "2026-10-01.meta.yaml")
     assert not git_ignored(levels / "2026-10-01.meta.yaml")
+    assert git_ignored(usage / ".orphaned/2026-10-03/usage.parquet")
 
 
 # ── tables over partitions ───────────────────────────────────────────
@@ -452,19 +454,19 @@ def test_dropped_partition_on_another_clone(setup_test_environment):
         snapshot_day(day)
     plan_and_run(alcove)
 
-    # another machine drops a day; pulling that change deletes only its
-    # metadata, since the data was never in git
-    (SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml").unlink()
-
-    # alcove won't read the leftover data, nor delete it
-    with pytest.raises(OrphanedDataError, match="gpu/usage/2026-10-02"):
-        plan_and_run(alcove)
-    assert (SNAPSHOT_DIR / "gpu/usage/2026-10-02/usage.parquet").exists()
-
-    # once it's deleted, what was built from that day goes too
-    shutil.rmtree(SNAPSHOT_DIR / "gpu/usage/2026-10-02")
+    # another machine drops a day, or we check out a branch from before it;
+    # either way only its metadata goes, since its data was never in git
+    meta = SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml"
+    meta_text = meta.read_text()
+    meta.unlink()
     plan_and_run(alcove)
 
+    # its data is set aside, not read and not deleted
+    set_aside = SNAPSHOT_DIR / "gpu/usage" / ORPHANED_DIR / "2026-10-02"
+    assert (set_aside / "usage.parquet").exists()
+    assert not (SNAPSHOT_DIR / "gpu/usage/2026-10-02").exists()
+
+    # while what was built from it is deleted
     assert not (TABLE_DIR / "gpu/clean/2026-10-02.parquet").exists()
     assert not (TABLE_DIR / "gpu/clean/2026-10-02.meta.yaml").exists()
 
@@ -474,41 +476,77 @@ def test_dropped_partition_on_another_clone(setup_test_environment):
     assert rollup["n"].to_list() == [2]
     with connect() as db:
         assert db.sql("SELECT count(*) AS n FROM gpu_clean")["n"].to_list() == [2]
-
     assert dirty_steps(alcove) == set()
+
+    # checking the newer commit out again brings the day back from where it
+    # was set aside
+    meta.write_text(meta_text)
+    plan_and_run(alcove)
+
+    assert (SNAPSHOT_DIR / "gpu/usage/2026-10-02/usage.parquet").exists()
+    assert not set_aside.parent.exists()
+    df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
+    assert df.height == 3
+
+
+def test_set_aside_data_is_only_restored_if_it_matches(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    snapshot_day("2026-10-01", 1.0)
+    plan_and_run(alcove)
+
+    # something else ends up set aside under the partition's name
+    meta = SNAPSHOT_DIR / "gpu/usage/2026-10-01.meta.yaml"
+    meta_text = meta.read_text()
+    meta.unlink()
+    plan_and_run(alcove)
+    set_aside = SNAPSHOT_DIR / "gpu/usage" / ORPHANED_DIR / "2026-10-01"
+    pl.DataFrame({"namespace": ["u-z"], "gpu_hours": [9.0]}).write_parquet(
+        set_aside / "usage.parquet"
+    )
+
+    meta.write_text(meta_text)
+    plan_and_run(alcove)
+
+    # the partition is fetched again instead, and the other data kept
+    df = pl.read_parquet(SNAPSHOT_DIR / "gpu/usage/2026-10-01/usage.parquet")
+    assert df["gpu_hours"].to_list() == [1.0]
+    assert (set_aside / "usage.parquet").exists()
 
 
 def test_unsnapshotted_partition_data_is_kept(setup_test_environment):
     alcove = Alcove.init()
     declare(alcove, "snapshot://spend/levels/*")
     declare(alcove, "table://spend/levels_all/latest", ["snapshot://spend/levels/*"])
+    declare(alcove, "table://other/latest")
     write_sql("spend/levels_all.sql", "SELECT * FROM '{levels}'")
+    write_sql("other.sql", "SELECT 1 AS x")
     snapshot_file_day("2026-10-01")
 
     # e.g. a fetch that writes in place, or a snapshot still being written
     staged = SNAPSHOT_DIR / "spend/levels/2026-10-02.parquet"
     pl.DataFrame({"usd": [2.0]}).write_parquet(staged)
 
-    with pytest.raises(OrphanedDataError, match="snapshot it"):
-        plan_and_run(alcove)
-    with pytest.raises(OrphanedDataError):
-        plan_and_run(alcove, dry_run=True)
+    # neither a dry run nor a run that doesn't touch the dataset moves it
+    plan_and_run(alcove, dry_run=True)
+    plan_and_run(alcove, regex="other")
     assert staged.exists()
 
-    # a run that doesn't touch the dataset isn't held up
-    declare(alcove, "table://other/latest")
-    write_sql("other.sql", "SELECT 1 AS x")
-    plan_and_run(alcove, regex="other")
-    assert (TABLE_DIR / "other/latest.parquet").exists()
+    plan_and_run(alcove)
+    assert not staged.exists()
+    set_aside = SNAPSHOT_DIR / "spend/levels" / ORPHANED_DIR / "2026-10-02.parquet"
+    assert set_aside.exists()
+    df = pl.read_parquet(TABLE_DIR / "spend/levels_all/latest.parquet")
+    assert df.height == 1
 
-    # snapshotting it in place makes it a partition
-    snapshot_to_alcove(staged, "spend/levels/2026-10-02")
+    # it can still be snapshotted from where it was set aside
+    snapshot_to_alcove(set_aside, "spend/levels/2026-10-02")
     plan_and_run(alcove)
     df = pl.read_parquet(TABLE_DIR / "spend/levels_all/latest.parquet")
     assert df.height == 2
 
 
-def test_remove_orphans_only_deletes_build_products(tmp_path):
+def test_tidy_orphans_only_deletes_build_products(tmp_path):
     # not monkeypatch.chdir: an earlier test may have deleted the current dir
     os.chdir(tmp_path)
 
@@ -521,7 +559,7 @@ def test_remove_orphans_only_deletes_build_products(tmp_path):
     keep = [
         touch(usage / "2026-01-01/usage.parquet"),
         touch(usage / "2026-01-01.meta.yaml"),
-        # metadata is never deleted, even with no step behind it
+        # metadata is never moved, even with no step behind it
         touch(usage / "2026-01-02.meta.yaml"),
         # snapshot data not named like a partition is not ours to judge
         touch(usage / "2025-01-01-v2/usage.parquet"),
@@ -543,6 +581,7 @@ def test_remove_orphans_only_deletes_build_products(tmp_path):
     link = ARTIFACT_DIR / "rep/2026-01-04"
     link.symlink_to(Path("elsewhere").resolve())
     gone.append(link)
+    orphan = touch(usage / "2026-01-03/usage.parquet").parent
 
     S = StepURI.parse
     declared = {
@@ -561,22 +600,24 @@ def test_remove_orphans_only_deletes_build_products(tmp_path):
     }
 
     # a dry run only reports
-    remove_orphans(declared, expanded, dry_run=True)
-    assert all(p.exists() or p.is_symlink() for p in keep + gone)
+    tidy_orphans(declared, expanded, dry_run=True)
+    assert all(p.exists() or p.is_symlink() for p in keep + gone + [orphan])
 
     # a run scoped to other datasets leaves these alone
-    remove_orphans(declared, expanded, scope={S("table://other/latest"): []})
-    assert all(p.exists() or p.is_symlink() for p in keep + gone)
+    tidy_orphans(declared, expanded, scope={S("table://other/latest"): []})
+    assert all(p.exists() or p.is_symlink() for p in keep + gone + [orphan])
 
-    remove_orphans(declared, expanded)
+    tidy_orphans(declared, expanded)
     assert all(p.exists() for p in keep)
     assert not any(p.exists() or p.is_symlink() for p in gone)
 
-    # but partition-shaped snapshot data with no metadata is only reported
-    orphan = touch(usage / "2026-01-03/usage.parquet")
-    with pytest.raises(OrphanedDataError, match="2026-01-03"):
-        remove_orphans(declared, expanded)
-    assert orphan.exists()
+    # partition-shaped snapshot data with no metadata is set aside, never
+    # overwriting what was set aside before
+    assert not orphan.exists()
+    assert (usage / ORPHANED_DIR / "2026-01-03/usage.parquet").exists()
+    touch(orphan / "usage.parquet")
+    tidy_orphans(declared, expanded)
+    assert (usage / ORPHANED_DIR / "2026-01-03~1/usage.parquet").exists()
 
 
 def test_reference_to_one_version_does_not_narrow_a_wildcard(setup_test_environment):

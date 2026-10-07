@@ -23,9 +23,11 @@ from alcove.db import (
 )
 from alcove.exceptions import StepDefinitionError
 from alcove.partitions import (
+    ORPHANED_DIR,
     is_partition_version,
+    orphaned_gitignore_entry,
     partition_gitignore_entry,
-    remove_orphans,
+    tidy_orphans,
 )
 from alcove.snapshots import Snapshot
 from alcove.types import StepURI
@@ -315,6 +317,7 @@ def snapshot_to_alcove(
         add_pattern_to_data_gitignore(
             partition_gitignore_entry(proposed_uri.base_path, extension)
         )
+        add_pattern_to_data_gitignore(orphaned_gitignore_entry(proposed_uri.base_path))
     else:
         add_to_data_gitignore(snapshot.path)
 
@@ -375,9 +378,7 @@ def plan_and_run(
 
     # files left by a dropped version would otherwise still match their
     # dataset's glob, here and on every other clone
-    remove_orphans(
-        alcove.steps, expanded, scope=dag if regex else None, dry_run=dry_run
-    )
+    tidy_orphans(alcove.steps, expanded, scope=dag if regex else None, dry_run=dry_run)
 
     if not force:
         dag = steps.prune_completed(dag)
@@ -687,8 +688,9 @@ def unreachable_snapshot_metadata(alcove: Alcove) -> list[Path]:
         if step in alcove.steps:
             continue
 
-        # a file inside a directory snapshot's data is not metadata
-        inside_snapshot = any(
+        # a file inside a directory snapshot's data is not metadata, nor is
+        # one inside data set aside from a partitioned dataset
+        inside_snapshot = ORPHANED_DIR in parts or any(
             StepURI("snapshot", "/".join(parts[:i])) in alcove.steps
             for i in range(1, len(parts))
         )

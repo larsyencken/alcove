@@ -2,7 +2,7 @@
 
 - `dev`
     - Snapshot datasets declared once as `snapshot://foo/*` are date-partitioned: each day is snapshotted as `foo/YYYY-MM-DD`, is discovered from its metadata file rather than listed in `alcove.yaml`, records when it was fetched, and is covered by a single `data/.gitignore` pattern (see [Wildcards](wildcards.md#daily-partitions))
-    - `alcove run` deletes per-partition tables and artifacts whose version no longer exists, and stops with a list of any partition-shaped snapshot data that has no metadata (such as a partition dropped on another clone), rather than letting a dataset's glob read it; `--dry-run` reports both
+    - `alcove run` moves partition-shaped snapshot data that has no metadata (such as a partition dropped on another clone, or missing from an older branch) into the dataset's `.orphaned/` folder rather than letting its glob read it, restores it when a partition with that content returns, and deletes per-partition tables and artifacts whose version no longer exists; `--dry-run` reports what it would do
     - A wildcard step with wildcard dependencies is built for the versions they all have; previously it took the first dependency's versions (so a lagging second dependency failed with a `KeyError`), and another step referring to one of its versions directly narrowed it to that version
     - A declared partitioned dataset with no partitions yet, and wildcard steps fed by it, expand to no steps; `AlcoveDB` skips union views for wildcard tables with nothing built
     - `alcove audit` warns about snapshot metadata files that no step refers to
