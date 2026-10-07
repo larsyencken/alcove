@@ -73,32 +73,40 @@ def partition_gitignore_entry(base_path: str, extension: str | None) -> str:
     return str(folder / f"{PARTITION_GLOB}{extension}")
 
 
-class OrphanedDataError(Exception):
-    "Partition-shaped snapshot data that no partition's metadata accounts for."
+# Where partition-shaped data with no metadata is moved, out of reach of the
+# dataset's glob, and where it is restored from if its metadata comes back.
+ORPHANED_DIR = ".orphaned"
 
 
-def remove_orphans(
+def orphaned_gitignore_entry(base_path: str) -> str:
+    "The data/.gitignore pattern for a partitioned dataset's set-aside data."
+    return f"{Path('snapshots') / base_path / ORPHANED_DIR}/"
+
+
+def tidy_orphans(
     declared: Dag,
     expanded: Dag,
     scope: Dag | None = None,
     dry_run: bool = False,
 ) -> None:
     """Deal with files in a wildcard dataset's folder that none of its versions
-    owns any more, before the globs that read a whole dataset can find them.
+    owns, before the globs that read a whole dataset can find them.
 
-    This happens when a partition is dropped by deleting its metadata
-    (perhaps on another machine, then pulled; its data was never in git), or
-    a snapshot is interrupted before its metadata is written.
+    For a partitioned snapshot this is data named like a partition but with
+    no metadata. A partition was dropped, perhaps on another machine (its data
+    was never in git); a branch was checked out that predates it; a snapshot
+    was interrupted; or data was written there before being snapshotted. Some
+    of these could be the only copy, so the data is moved aside into
+    `<dataset>/.orphaned/` rather than deleted, and moved back if a partition
+    with exactly that content reappears, e.g. on checking the newer branch
+    out again.
 
     Tables and artifacts built for a version that's gone are build products,
-    so they are deleted. Snapshot data is never deleted: it could be the only
-    copy of something, such as data staged there before snapshotting or a
-    snapshot still being written. Instead this raises, listing it.
+    and are deleted.
 
-    `scope` limits the clean-up to datasets with steps in it, e.g. the steps
-    a filtered `alcove run` will look at.
+    `scope` limits this to datasets with steps in it, e.g. the steps a
+    filtered `alcove run` will look at.
     """
-    orphaned_data = []
     for step in declared:
         if not step.is_wildcard:
             continue
@@ -110,14 +118,17 @@ def remove_orphans(
             continue
 
         folder = step.full_path.parent
-        if not folder.is_dir():
-            continue
-
         versions = {
             s.version
             for s in expanded
             if s.scheme == step.scheme and s.base_path == base
         }
+        if step.scheme == "snapshot":
+            _restore_set_aside(base, versions, dry_run)
+
+        if not folder.is_dir():
+            continue
+
         # datasets nested below this one, e.g. foo/bar/latest beside foo/*
         nested = {
             s.path[len(base) + 1 :].split("/")[0]
@@ -132,22 +143,61 @@ def remove_orphans(
                 continue
 
             if step.scheme == "snapshot":
-                orphaned_data.append(path)
+                dest = _free_path(folder / ORPHANED_DIR / path.name)
+                print_op(
+                    "WOULD SET ASIDE" if dry_run else "SET ASIDE", f"{path} -> {dest}"
+                )
+                if not dry_run:
+                    dest.parent.mkdir(exist_ok=True)
+                    shutil.move(path, dest)
             elif dry_run:
                 print_op("WOULD DELETE", path)
             else:
                 print_op("DELETE", path)
                 _delete(path)
 
-    if orphaned_data:
-        listing = "\n".join(f"  {path}" for path in orphaned_data)
-        raise OrphanedDataError(
-            "This data is named like a partition but has no metadata, so it "
-            "isn't one, yet tables reading its dataset would still pick it up:\n"
-            f"{listing}\n"
-            "If it belongs to a partition that was dropped, delete it. If it "
-            "is new data, snapshot it with `alcove snapshot`. Then run again."
-        )
+
+def _restore_set_aside(base_path: str, versions: set[str], dry_run: bool) -> None:
+    "Move set-aside data back for partitions that have their metadata again."
+    from alcove.snapshots import Snapshot
+    from alcove.utils import checksum_file, checksum_folder, checksum_manifest
+
+    set_aside = SNAPSHOT_DIR / base_path / ORPHANED_DIR
+    if not set_aside.is_dir():
+        return
+
+    for path in sorted(set_aside.iterdir()):
+        version = _owning_version("snapshot", path)
+        if version not in versions:
+            continue
+
+        snapshot = Snapshot.load(f"{base_path}/{version}")
+        if snapshot.path.exists() or snapshot.path.name != path.name:
+            continue
+
+        # only data that is exactly this partition's, or we'd lose it when the
+        # partition is fetched over it
+        if snapshot.snapshot_type == "file":
+            matches = checksum_file(path) == snapshot.checksum
+        else:
+            matches = checksum_manifest(checksum_folder(path)) == snapshot.checksum
+
+        if matches:
+            print_op("WOULD RESTORE" if dry_run else "RESTORE", snapshot.path)
+            if not dry_run:
+                shutil.move(path, snapshot.path)
+
+    if not dry_run and not any(set_aside.iterdir()):
+        set_aside.rmdir()
+
+
+def _free_path(path: Path) -> Path:
+    "`path`, or `path~1`, `path~2`... if something is already there."
+    candidate, n = path, 0
+    while candidate.exists() or candidate.is_symlink():
+        n += 1
+        candidate = path.with_name(f"{path.name}~{n}")
+    return candidate
 
 
 def _delete(path: Path) -> None:

@@ -79,14 +79,18 @@ Each day is an ordinary snapshot, with these differences:
 - **It is named by a date, which you must give.** Use the date its data covers, or for a pull that covers a trailing window, the window's last day (its as-of date). The name must be a real ISO date (`YYYY-MM-DD`); alcove won't fill in today's date for you.
 - **Its metadata records when it was fetched** as `date_accessed`, since its name says which day it covers.
 - **It is not added to `alcove.yaml`.** Alcove discovers partitions from their metadata files, `data/snapshots/gpu/usage/<date>.meta.yaml`, which you commit. A daily job therefore adds one new file and edits nothing that another run might also be editing. A metadata file there that isn't named by a date is not a partition; `alcove audit` warns about it.
-- **One `data/.gitignore` pattern covers every partition**, e.g. `snapshots/gpu/usage/????-??-??/` for directories or `snapshots/gpu/usage/????-??-??.parquet` for single files. It matches the data but never the metadata.
+- **One `data/.gitignore` pattern covers every partition**, e.g. `snapshots/gpu/usage/????-??-??/` for directories or `snapshots/gpu/usage/????-??-??.parquet` for single files. It matches the data but never the metadata. A second pattern, `snapshots/gpu/usage/.orphaned/`, covers data set aside (see below).
 - **A new partition copies the descriptive metadata** (`name`, `description`, `source_name`, `source_url`, `access_notes`, `license`, `license_url`) of the dataset's most recent partition.
 
 To revise a day, for example after late-arriving data, snapshot it again with `--force`.
 
-To drop a day, delete its `.meta.yaml` file and its data, and commit. The data was never in git, so other clones still have it after they pull. Their next `alcove run` stops and lists it rather than reading or deleting it; delete it there too. Tables and artifacts built from that day are build products, and `alcove run` deletes those itself (`--dry-run` shows what it would delete).
+To drop a day, delete its `.meta.yaml` file and its data, and commit.
 
-The same check catches data that's named like a partition but has no metadata for any other reason, such as a snapshot that was interrupted, or data written into the folder before being snapshotted. Stage new data outside `data/snapshots/`, or `alcove run` will stop until you snapshot or delete it. A run filtered to other steps (`alcove run <regex>`) only checks the datasets it touches.
+#### Data with no metadata
+
+Data in a partitioned dataset's folder that is named like a partition but has no metadata isn't a partition, so tables must not read it. That happens on other clones after a day is dropped (the data was never in git), after checking out a branch that predates some days, after an interrupted snapshot, or when data is written into the folder before being snapshotted. Since it could be the only copy of something, `alcove run` doesn't delete it: it moves it into `data/snapshots/<dataset>/.orphaned/`, out of reach of the dataset's glob. If a partition with exactly that content gets its metadata back, for example when you check the newer branch out again, the next run moves it back rather than downloading it again. Anything already set aside under the same name is kept, as `<name>~1` and so on. Delete `.orphaned/` whenever you no longer need what's in it.
+
+Tables and artifacts built for a day that's gone are build products, and `alcove run` deletes them. `alcove run --dry-run` shows what it would move or delete, and a run filtered to other steps (`alcove run <regex>`) leaves datasets it doesn't touch alone.
 
 ### Find the days you don't have yet
 
@@ -145,4 +149,3 @@ A declared dataset with no partitions yet expands to no steps, as do wildcard st
 
 If you already list a dataset's dated snapshots in `alcove.yaml`, add the `snapshot://<dataset>/*: []` declaration and delete the dated lines; their metadata files are already in place. Versions not named by a plain date, such as `2025-01-01-v2`, are not partitions and must stay listed explicitly. They behave as before, including being revised with `--force`.
 
-If you check out an older commit that lacks some partitions' metadata, `alcove run` stops and lists their data, as for a dropped day. Rather than delete it, check out the newer commit again.
