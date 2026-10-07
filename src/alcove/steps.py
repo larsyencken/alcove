@@ -62,7 +62,7 @@ def is_completed(step: StepURI, deps: list[StepURI]) -> bool:
         return tables.is_completed(step, deps)
 
     elif step.scheme == "artifact":
-        return artifacts.is_completed(step)
+        return artifacts.is_completed(step, deps)
 
     raise ValueError(f"Unknown scheme {step.scheme}")
 

@@ -102,7 +102,7 @@ def test_build_artifact_without_deps(setup_test_environment):
     assert metadata["uri"] == "artifact://report/latest"
     assert set(metadata["manifest"]) == {"index.html"}
     assert metadata["execution"]["status"] == "success"
-    assert is_completed(uri)
+    assert is_completed(uri, [])
 
 
 def test_build_artifact_that_writes_nothing_fails(setup_test_environment):
@@ -114,7 +114,7 @@ def test_build_artifact_that_writes_nothing_fails(setup_test_environment):
 
     assert not artifact_path(uri).exists()
     assert not list(ARTIFACT_DIR.rglob("*.building"))
-    assert not is_completed(uri)
+    assert not is_completed(uri, [])
 
 
 def test_failed_rebuild_keeps_previous_artifact(setup_test_environment):
@@ -130,7 +130,7 @@ def test_failed_rebuild_keeps_previous_artifact(setup_test_environment):
     assert (artifact_path(uri) / "index.html").read_text() == "<h1>hello</h1>"
     assert not list(ARTIFACT_DIR.rglob("*.building"))
     # but it is reported stale, since the script changed
-    assert not is_completed(uri)
+    assert not is_completed(uri, [])
 
 
 def test_missing_script_keeps_previous_artifact(setup_test_environment):

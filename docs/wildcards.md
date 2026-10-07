@@ -6,28 +6,27 @@ Alcove supports wildcard `*` steps for date-partitioned tables, allowing you to 
 
 A wildcard step URI like `table://foo/*` tells Alcove to expand the step into one concrete step per discovered version. Versions are discovered by scanning the DAG for concrete steps that share the same base path.
 
-For example, if you have snapshots `snapshot://raw/2025-01`, `snapshot://raw/2025-02`, and `snapshot://raw/2025-03`, a wildcard table `table://clean/*` that depends on `snapshot://raw/*` will automatically expand into three concrete steps: `table://clean/2025-01`, `table://clean/2025-02`, and `table://clean/2025-03`.
+For example, if you have snapshots `snapshot://raw/2025-01-01`, `snapshot://raw/2025-02-01`, and `snapshot://raw/2025-03-01`, a wildcard table `table://clean/*` that depends on `snapshot://raw/*` will automatically expand into three concrete steps: `table://clean/2025-01-01`, `table://clean/2025-02-01`, and `table://clean/2025-03-01`.
 
 ## Configuration
 
 Define wildcard steps in your `alcove.yaml` using `*` as the version:
 
 ```yaml
+version: 1
 steps:
   # Concrete snapshots with specific versions
-  - uri: snapshot://raw/2025-01
-  - uri: snapshot://raw/2025-02
-  - uri: snapshot://raw/2025-03
+  snapshot://raw/2025-01-01: []
+  snapshot://raw/2025-02-01: []
+  snapshot://raw/2025-03-01: []
 
   # Wildcard table: one script runs per version
-  - uri: table://clean/*
-    deps:
-      - snapshot://raw/*
+  table://clean/*:
+  - snapshot://raw/*
 
   # Another wildcard table that chains off the first
-  - uri: table://summary/*
-    deps:
-      - table://clean/*
+  table://summary/*:
+  - table://clean/*
 ```
 
 The build script for `table://clean/*` is written once and reused for each version. During `alcove run`, the wildcard expands and the script executes once per version, receiving the correct versioned dependency paths.
@@ -47,3 +46,84 @@ db = alcove.connect()
 # Query across all partitions at once
 df = db.sql("SELECT * FROM clean")
 ```
+
+## Daily partitions
+
+For data that arrives a day at a time, such as usage metrics, billing exports or a daily API pull, snapshot each day separately and let tables read them together. Listing every day in `alcove.yaml` would mean editing it on every run, so a partitioned dataset is declared once instead.
+
+### Declare the dataset once
+
+```yaml
+version: 1
+steps:
+  snapshot://gpu/usage/*: []
+```
+
+### Snapshot one day at a time
+
+```bash
+alcove snapshot usage-2026-10-06/ gpu/usage/2026-10-06
+```
+
+or from Python:
+
+```python
+from pathlib import Path
+import alcove
+
+alcove.snapshot_to_alcove(Path("usage-2026-10-06"), "gpu/usage/2026-10-06")
+```
+
+Each day is an ordinary snapshot, with these differences:
+
+- **It is named by the date its data covers**, not the date you fetched it. `date_accessed` in its metadata records when it was fetched. The name must be a real ISO date (`YYYY-MM-DD`).
+- **It is not added to `alcove.yaml`.** Alcove discovers partitions from their metadata files, `data/snapshots/gpu/usage/<date>.meta.yaml`, which you commit. A daily job therefore adds one new file and edits nothing that another run might also be editing. Any other `.meta.yaml` file in that folder is an error.
+- **One `data/.gitignore` pattern covers every partition**, e.g. `snapshots/gpu/usage/????-??-??/` for directories or `snapshots/gpu/usage/????-??-??.parquet` for single files. It matches the data but never the metadata.
+- **A new partition copies the descriptive metadata** (`name`, `description`, `source_name`, `source_url`, `access_notes`, `license`, `license_url`) of the dataset's most recent partition.
+
+To revise a day (for example after late-arriving data), snapshot it again with `--force`. To drop a day, delete its `.meta.yaml` file and its data.
+
+### Find the days you don't have yet
+
+```python
+from alcove.core import Alcove
+from alcove.types import StepURI
+
+have = set(Alcove().versions(StepURI.parse("snapshot://gpu/usage/*")))
+```
+
+### Read every day in one table
+
+```yaml
+  table://gpu/usage_all/latest:
+  - snapshot://gpu/usage/*
+```
+
+In a SQL recipe, `{usage}` becomes a glob that matches each partition's data and never its metadata: `data/snapshots/gpu/usage/????-??-??` for directory partitions, or `data/snapshots/gpu/usage/????-??-??.parquet` for single-file ones. DuckDB's path functions recover each row's date:
+
+```sql
+-- directory partitions, each holding a usage.parquet
+SELECT parse_filename(parse_dirpath(filename))::DATE AS day, *
+FROM read_parquet('{usage}/usage.parquet', filename = true)
+
+-- single-file partitions
+SELECT parse_filename(filename, true)::DATE AS day, *
+FROM read_parquet('{usage}', filename = true)
+```
+
+SQL recipes are templated with Python's `str.format`, so prefer these functions to a regex: a quantifier like `\d{4}` would need its braces doubled (`\d{{4}}`). A Python script receives the same glob as an argument and expands it itself.
+
+The table rebuilds whenever a partition is added, removed or revised. All partitions of a dataset must be the same kind (all directories, or all files with one extension).
+
+### Or build one table per day
+
+```yaml
+  table://gpu/clean/*:
+  - snapshot://gpu/usage/*
+```
+
+This builds `table://gpu/clean/<date>` for each partition, and a new day only builds its own table. `AlcoveDB` unions them as described above.
+
+### Before the first day arrives
+
+A declared dataset with no partitions yet, and any wildcard steps fed only by it, expand to no steps, so `alcove run` carries on with everything else. A concrete step that reads it, like `table://gpu/usage_all/latest` above, fails with "matched zero concrete versions" until the first partition exists.
