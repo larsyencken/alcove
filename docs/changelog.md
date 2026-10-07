@@ -1,5 +1,12 @@
 # Changelog
 
+- `dev`
+    - Snapshot datasets declared once as `snapshot://foo/*` are date-partitioned: each day is snapshotted as `foo/YYYY-MM-DD`, discovered from its metadata file rather than listed in `alcove.yaml`, and covered by a single `data/.gitignore` pattern (see [Wildcards](wildcards.md#daily-partitions))
+    - Fixed tables and artifacts not rebuilding when a `latest` dependency resolves to a newer version, or when a wildcard dependency gains or loses a partition ([#70](https://github.com/larsyencken/alcove/issues/70))
+    - Fixed `latest` resolving to a sibling dataset that shares a name prefix, and failing with a bare `max()` error when there are no versions ([#69](https://github.com/larsyencken/alcove/issues/69))
+    - Fixed tables over several single-file snapshot versions reading their `.meta.yaml` sidecars as data
+    - Added `Alcove.versions()` to list a dataset's versions
+
 - `0.4.0` (2026-09-22)
     - Added `artifact://` steps for derived outputs that are not tables (e.g. rendered dashboards, models), built by a Python script into `data/artifacts/<path>/`
     - Added `alcove new-artifact <path> [deps...]`

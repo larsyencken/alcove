@@ -47,7 +47,7 @@ def artifact_path(uri: StepURI) -> Path:
     return ARTIFACT_DIR / uri.path
 
 
-def is_completed(uri: StepURI) -> bool:
+def is_completed(uri: StepURI, deps: list[StepURI]) -> bool:
     "An artifact is up to date when its output exists and no input has changed."
     assert uri.scheme == "artifact"
 
@@ -64,7 +64,7 @@ def is_completed(uri: StepURI) -> bool:
             return False
 
     # and every input it was built from must be unchanged
-    return _inputs_unchanged(uri, metadata["input_manifest"])
+    return _inputs_unchanged(uri, metadata["input_manifest"], deps)
 
 
 def build_artifact(uri: StepURI, dependencies: list[StepURI]) -> None:

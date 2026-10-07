@@ -12,7 +12,8 @@ import jsonschema
 import polars as pl
 
 from alcove.exceptions import ValidationError
-from alcove.paths import ARTIFACT_DIR, SNAPSHOT_DIR, TABLE_DIR
+from alcove.partitions import PARTITION_GLOB, is_partition_version
+from alcove.paths import ARTIFACT_DIR, DATA_DIR, SNAPSHOT_DIR, TABLE_DIR
 from alcove.schemas import TABLE_SCHEMA
 from alcove.snapshots import Snapshot
 from alcove.table_metadata import (
@@ -47,13 +48,27 @@ def is_completed(uri: StepURI, deps: list[StepURI]) -> bool:
         if checksum_file(config_path) != input_manifest[str(config_path)]:
             return False
 
-    return _inputs_unchanged(uri, input_manifest)
+    return _inputs_unchanged(uri, input_manifest, deps)
 
 
-def _inputs_unchanged(uri: StepURI, input_manifest: Manifest) -> bool:
-    """Every recorded input still has the same checksum, and the step's script
+def _inputs_unchanged(
+    uri: StepURI, input_manifest: Manifest, deps: list[StepURI]
+) -> bool:
+    """Every recorded input still has the same checksum, the step's script
     has not grown any files since (a step folder may gain a template or module
-    that the recorded manifest never saw)."""
+    that the recorded manifest never saw), and the step still depends on
+    exactly the versions it was built from.
+
+    The last check catches a `latest` dependency that now resolves to a newer
+    version, and a partition added to or removed from a wildcard dependency:
+    in both cases every recorded input is unchanged, yet the step is stale.
+    """
+    built_from = {
+        path for path in input_manifest if Path(path).is_relative_to(DATA_DIR)
+    }
+    if built_from != {str(_metadata_path(dep)) for dep in deps}:
+        return False
+
     for path, checksum in input_manifest.items():
         if not Path(path).exists() or checksum != checksum_file(path):
             return False
@@ -158,13 +173,16 @@ def _generate_build_command(
     # each version individually. Artifacts are passed one directory at a
     # time: a glob over their parent would also match the .meta.yaml
     # sidecars that sit beside each version's directory.
-    group_counts = Counter(f"{d.scheme}://{d.base_path}" for d in dependencies)
+    groups: dict[str, list[StepURI]] = {}
+    for dep in dependencies:
+        groups.setdefault(f"{dep.scheme}://{dep.base_path}", []).append(dep)
+
     added_globs: set[str] = set()
     for dep in dependencies:
         group_key = f"{dep.scheme}://{dep.base_path}"
-        if group_counts[group_key] > 1 and dep.scheme != "artifact":
+        if len(groups[group_key]) > 1 and dep.scheme != "artifact":
             if group_key not in added_globs:
-                cmd.append(_dependency_glob_path(dep))
+                cmd.append(_dependency_glob_path(groups[group_key]))
                 added_globs.add(group_key)
         else:
             cmd.append(_dependency_path(dep))
@@ -190,10 +208,36 @@ def _dependency_path(uri: StepURI) -> Path:
         raise ValueError(f"Unknown scheme {uri.scheme}")
 
 
-def _dependency_glob_path(uri: StepURI) -> Path:
-    """Return a glob path for all versions under a base_path, e.g. data/tables/foo/*.parquet."""
+def _dependency_glob_path(versions: list[StepURI]) -> Path:
+    """A glob over several versions of one dataset that matches their data but
+    never their .meta.yaml sidecars, e.g. data/tables/foo/*.parquet or
+    data/snapshots/foo/????-??-??."""
+    uri = versions[0]
     if uri.scheme == "snapshot":
-        return SNAPSHOT_DIR / uri.base_path / "*"
+        # date-named partitions can be matched exactly; other names can't
+        stem = (
+            PARTITION_GLOB
+            if all(is_partition_version(v.version) for v in versions)
+            else "*"
+        )
+
+        kinds = set()
+        for v in versions:
+            snapshot = Snapshot.load(v.path)
+            kinds.add((snapshot.snapshot_type, snapshot.extension))
+
+        if len(kinds) > 1:
+            raise ValueError(
+                f"Versions of snapshot://{uri.base_path} mix files and directories "
+                f"or file extensions ({sorted(map(str, kinds))}), so one glob "
+                "cannot read them all"
+            )
+
+        ((snapshot_type, extension),) = kinds
+        if snapshot_type == "file":
+            return SNAPSHOT_DIR / uri.base_path / f"{stem}{extension}"
+
+        return SNAPSHOT_DIR / uri.base_path / stem
 
     elif uri.scheme == "table":
         return TABLE_DIR / uri.base_path / "*.parquet"

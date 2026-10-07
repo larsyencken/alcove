@@ -14,6 +14,16 @@ def expand_wildcards(dag: Dag) -> tuple[Dag, dict[str, list[str]]]:
     expanded: Dag = dict(dag)
     wildcard_groups: dict[str, list[str]] = {}
 
+    # Wildcard groups known to be empty on purpose: a partitioned snapshot
+    # dataset declared as `snapshot://foo/*` before its first partition
+    # exists, and wildcard steps fed only by such groups. They expand to no
+    # steps, where an undeclared group with no versions is an error.
+    empty_groups = {
+        f"{s.scheme}://{s.base_path}"
+        for s in dag
+        if s.scheme == "snapshot" and s.is_wildcard and not dag[s]
+    }
+
     # Process wildcard step keys in topological order so chained wildcards work
     topo_order = list(graphlib.TopologicalSorter(expanded).static_order())
     wildcard_keys = [s for s in topo_order if s in expanded and s.is_wildcard]
@@ -32,12 +42,20 @@ def expand_wildcards(dag: Dag) -> tuple[Dag, dict[str, list[str]]]:
                         versions = dep_versions
                         break
 
-        if not versions:
-            raise ValueError(
-                f"Wildcard step {wc_step} matched zero concrete versions"
-            )
-
         group_key = f"{wc_step.scheme}://{wc_step.base_path}"
+        if not versions:
+            fed_by_empty_group = any(
+                f"{d.scheme}://{d.base_path}" in empty_groups
+                for d in wc_deps
+                if d.is_wildcard
+            )
+            if group_key in empty_groups or fed_by_empty_group:
+                empty_groups.add(group_key)
+                del expanded[wc_step]
+                continue
+
+            raise ValueError(f"Wildcard step {wc_step} matched zero concrete versions")
+
         wildcard_groups[group_key] = sorted(versions)
 
         # Also record wildcard groups for wildcard deps

@@ -22,6 +22,7 @@ from alcove.db import (
     _better_alias,
 )
 from alcove.exceptions import StepDefinitionError
+from alcove.partitions import is_partition_version, partition_gitignore_entry
 from alcove.snapshots import Snapshot
 from alcove.types import StepURI
 from alcove.utils import DATA_IGNORES, checksum_manifest, console
@@ -246,12 +247,27 @@ def snapshot_to_alcove(
     # sanity check that it does not exist
     alcove = Alcove()
     proposed_uri = StepURI("snapshot", dataset_name)
+    partitioned = alcove.is_partitioned(proposed_uri)
+    if partitioned and not is_partition_version(proposed_uri.version):
+        raise ValueError(
+            f"{proposed_uri} is a partition of snapshot://{proposed_uri.base_path}/*, "
+            "so its version must be an ISO date (YYYY-MM-DD)"
+        )
+
     if proposed_uri in alcove.steps and not force:
         raise ValueError(f"Dataset already exists in alcove: {proposed_uri}")
 
-    existing_metadata = {}
+    # keep the descriptive metadata of the snapshot we are replacing or, for a
+    # new partition, of the dataset's most recent partition
+    metadata_source = None
     if proposed_uri in alcove.steps:
-        for k, v in Snapshot.load(dataset_name).get_metadata().items():
+        metadata_source = proposed_uri
+    elif partitioned and alcove.versions(proposed_uri):
+        metadata_source = proposed_uri.with_version(alcove.versions(proposed_uri)[-1])
+
+    existing_metadata = {}
+    if metadata_source:
+        for k, v in Snapshot.load(metadata_source.path).get_metadata().items():
             if k not in ["checksum", "manifest", "date_accessed"]:
                 existing_metadata[k] = v
 
@@ -260,15 +276,24 @@ def snapshot_to_alcove(
     snapshot = Snapshot.create(file_path, dataset_name, existing_metadata)
 
     # ensure that the data itself does not enter git (if not already ignored)
-    from alcove.utils import add_to_data_gitignore
+    from alcove.utils import add_pattern_to_data_gitignore, add_to_data_gitignore
 
-    add_to_data_gitignore(snapshot.path)
+    if partitioned:
+        # one pattern covers every partition of the dataset
+        extension = snapshot.extension if snapshot.snapshot_type == "file" else None
+        add_pattern_to_data_gitignore(
+            partition_gitignore_entry(proposed_uri.base_path, extension)
+        )
+    else:
+        add_to_data_gitignore(snapshot.path)
 
     if edit:
         subprocess.run(["vim", snapshot.metadata_path])
 
-    alcove.steps[proposed_uri] = []
-    alcove.save()
+    if not partitioned:
+        # partitions are discovered from their metadata, not listed in alcove.yaml
+        alcove.steps[proposed_uri] = []
+        alcove.save()
 
     return snapshot
 

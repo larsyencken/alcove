@@ -123,6 +123,12 @@ def add_to_data_gitignore(path: Path) -> None:
     add_entry_to_file(data_gitignore, path_str)
 
 
+def add_pattern_to_data_gitignore(pattern: str) -> None:
+    "Add a pattern, relative to data/, to data/.gitignore."
+    ensure_data_gitignore()
+    add_entry_to_file(Path("data") / ".gitignore", pattern)
+
+
 def add_to_gitignore(path: Path) -> None:
     """
     Legacy function to add a path directly to .gitignore.
