@@ -58,6 +58,73 @@ def discover_partitions(base_path: str) -> list[str]:
     return sorted(versions)
 
 
+def check_contiguous(declared: Dag, scope: Dag | None = None) -> None:
+    """Stop if a partitioned dataset is missing a day between its first
+    partition and its last.
+
+    A gap almost always means a fetch failed or a day was dropped from the
+    middle, and the tables that read the dataset would silently go without
+    it. A day with no data gets an empty partition instead.
+
+    `scope` limits this to datasets with steps in it, as for `tidy_orphans`.
+    """
+    problems = []
+    for step in sorted(declared):
+        if not (step.scheme == "snapshot" and step.is_wildcard):
+            continue
+
+        base = step.base_path
+        if scope is not None and not any(
+            s.scheme == "snapshot" and s.base_path == base for s in scope
+        ):
+            continue
+
+        days = sorted(
+            datetime.date.fromisoformat(s.version)
+            for s in declared
+            if s.scheme == "snapshot"
+            and s.base_path == base
+            and is_partition_version(s.version)
+        )
+        gaps = _gaps(days)
+        if gaps:
+            problems.append(f"  {step} is missing {_describe_gaps(gaps)}")
+
+    if problems:
+        raise ValueError(
+            "Every day from a partitioned dataset's first partition to its last "
+            "must have a partition, but:\n"
+            + "\n".join(problems)
+            + "\nSnapshot each missing day, as an empty partition if it has no "
+            "data. Only the first or last day can be dropped."
+        )
+
+
+def _gaps(days: list[datetime.date]) -> list[tuple[datetime.date, datetime.date]]:
+    "Runs of missing days between consecutive partitions, as (first, last)."
+    one_day = datetime.timedelta(days=1)
+    return [
+        (prev + one_day, day - one_day)
+        for prev, day in zip(days, days[1:])
+        if day - prev > one_day
+    ]
+
+
+def _describe_gaps(
+    gaps: list[tuple[datetime.date, datetime.date]], limit: int = 5
+) -> str:
+    "e.g. `4 days: 2026-10-02, 2026-10-04 to 2026-10-06`"
+    n_days = sum((last - first).days + 1 for first, last in gaps)
+    runs = [
+        str(first) if first == last else f"{first} to {last}"
+        for first, last in gaps[:limit]
+    ]
+    if len(gaps) > limit:
+        runs.append(f"and {len(gaps) - limit} more gaps")
+
+    return f"{n_days} day{'' if n_days == 1 else 's'}: {', '.join(runs)}"
+
+
 def partition_gitignore_entry(base_path: str, extension: str | None) -> str:
     """One data/.gitignore pattern that covers every partition of a dataset.
 
