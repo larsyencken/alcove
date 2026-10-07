@@ -100,10 +100,13 @@ class Alcove:
         return step.scheme == "snapshot" and step.with_version("*") in self.steps
 
     def versions(self, step: StepURI) -> list[str]:
-        """Every concrete version of the dataset `step` belongs to, oldest first.
+        """The concrete versions of the dataset `step` belongs to, oldest first.
 
         `step` can be any version of the dataset, e.g. `snapshot://foo/*`;
-        only exact siblings count, not `foo_v2/...` or `foo/bar/...`.
+        only exact siblings count, not `foo_v2/...` or `foo/bar/...`. Covers
+        steps listed in alcove.yaml and discovered snapshot partitions; the
+        per-partition versions of a wildcard table only exist once `alcove
+        run` expands it, so they are not included.
         """
         return sorted(
             s.version

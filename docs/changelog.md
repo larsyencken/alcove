@@ -1,10 +1,14 @@
 # Changelog
 
 - `dev`
-    - Snapshot datasets declared once as `snapshot://foo/*` are date-partitioned: each day is snapshotted as `foo/YYYY-MM-DD`, discovered from its metadata file rather than listed in `alcove.yaml`, and covered by a single `data/.gitignore` pattern (see [Wildcards](wildcards.md#daily-partitions))
-    - Fixed tables and artifacts not rebuilding when a `latest` dependency resolves to a newer version, or when a wildcard dependency gains or loses a partition ([#70](https://github.com/larsyencken/alcove/issues/70))
+    - Snapshot datasets declared once as `snapshot://foo/*` are date-partitioned: each day is snapshotted as `foo/YYYY-MM-DD`, is discovered from its metadata file rather than listed in `alcove.yaml`, records when it was fetched, and is covered by a single `data/.gitignore` pattern (see [Wildcards](wildcards.md#daily-partitions))
+    - `alcove run` deletes data in a wildcard dataset's folder that no version owns any more, such as a dropped partition's data or the per-partition tables built from it, so it can't leak into union globs
+    - A per-partition step with several wildcard dependencies is built for the versions they all have, instead of depending on versions that don't exist
+    - A declared partitioned dataset with no partitions yet, and wildcard steps fed by it, expand to no steps; `AlcoveDB` skips union views for wildcard tables with nothing built
+    - `alcove audit` warns about snapshot metadata files that no step refers to
+    - Fixed tables and artifacts not rebuilding when a `latest` dependency resolves to a newer version, or when a wildcard dependency gains or loses a partition ([#70](https://github.com/larsyencken/alcove/issues/70)); steps that were stale this way rebuild on the first run after upgrading
     - Fixed `latest` resolving to a sibling dataset that shares a name prefix, and failing with a bare `max()` error when there are no versions ([#69](https://github.com/larsyencken/alcove/issues/69))
-    - Fixed tables over several single-file snapshot versions reading their `.meta.yaml` sidecars as data
+    - Changed the template value for several single-file snapshot versions to include their extension (`data/snapshots/foo/????-??-??.csv`), matching what a single version already gave, so one recipe (`'{foo}'`) works for both; recipes that appended the extension themselves (`'{foo}.csv'`) need updating
     - Added `Alcove.versions()` to list a dataset's versions
 
 - `0.4.0` (2026-09-22)

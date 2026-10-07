@@ -16,10 +16,10 @@ def expand_wildcards(dag: Dag) -> tuple[Dag, dict[str, list[str]]]:
 
     # Wildcard groups known to be empty on purpose: a partitioned snapshot
     # dataset declared as `snapshot://foo/*` before its first partition
-    # exists, and wildcard steps fed only by such groups. They expand to no
+    # exists, and wildcard steps with nothing to build yet. They expand to no
     # steps, where an undeclared group with no versions is an error.
     empty_groups = {
-        f"{s.scheme}://{s.base_path}"
+        _group_key(s)
         for s in dag
         if s.scheme == "snapshot" and s.is_wildcard and not dag[s]
     }
@@ -30,26 +30,30 @@ def expand_wildcards(dag: Dag) -> tuple[Dag, dict[str, list[str]]]:
 
     for wc_step in wildcard_keys:
         wc_deps = expanded[wc_step]
+        group_key = _group_key(wc_step)
+        wildcard_deps = [d for d in wc_deps if d.is_wildcard]
 
-        # Discover versions: from the step's own base_path OR from its wildcard deps
-        versions = _discover_versions(wc_step, expanded)
-        if not versions:
-            # Try to discover versions from wildcard dependencies
-            for dep in wc_deps:
-                if dep.is_wildcard:
-                    dep_versions = _discover_versions(dep, expanded)
-                    if dep_versions:
-                        versions = dep_versions
-                        break
+        # Versions come from the step's own concrete siblings or, failing that,
+        # from its wildcard deps: one step per version that every one of them
+        # has, so a step fed by two daily datasets waits for a day until both
+        # have it, instead of depending on a version that doesn't exist.
+        versions = set(_discover_versions(wc_step, expanded))
+        if not versions and wildcard_deps:
+            dep_versions = []
+            for dep in wildcard_deps:
+                found = set(_discover_versions(dep, expanded))
+                if not found and _group_key(dep) not in empty_groups:
+                    raise ValueError(
+                        f"Wildcard dependency {dep} of {wc_step} "
+                        "matched zero concrete versions"
+                    )
+                dep_versions.append(found)
 
-        group_key = f"{wc_step.scheme}://{wc_step.base_path}"
+            versions = set.intersection(*dep_versions)
+
         if not versions:
-            fed_by_empty_group = any(
-                f"{d.scheme}://{d.base_path}" in empty_groups
-                for d in wc_deps
-                if d.is_wildcard
-            )
-            if group_key in empty_groups or fed_by_empty_group:
+            if group_key in empty_groups or wildcard_deps:
+                # nothing to build until the data it reads arrives
                 empty_groups.add(group_key)
                 del expanded[wc_step]
                 continue
@@ -109,6 +113,10 @@ def expand_wildcards(dag: Dag) -> tuple[Dag, dict[str, list[str]]]:
                 raise ValueError(f"Wildcard dep {dep} on {step} was not expanded")
 
     return expanded, wildcard_groups
+
+
+def _group_key(step: StepURI) -> str:
+    return f"{step.scheme}://{step.base_path}"
 
 
 def _discover_versions(wc_step: StepURI, dag: Dag) -> list[str]:
