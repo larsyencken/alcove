@@ -31,10 +31,12 @@ class AlcoveDB:
                 f"CREATE VIEW \"{table_name}\" AS SELECT * FROM read_parquet('{table_path}')"
             )
 
-        # Create union views for wildcard groups
+        # Create union views for wildcard groups that have any partitions yet
         for base_path in wildcard_tables:
             union_name = _path_to_snake(base_path)
             glob_path = Path("data/tables") / base_path / "*.parquet"
+            if not any(glob_path.parent.glob(glob_path.name)):
+                continue
             self._conn.execute(
                 f"CREATE VIEW \"{union_name}\" AS SELECT * FROM read_parquet('{glob_path}')"
             )

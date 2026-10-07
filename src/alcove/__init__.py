@@ -22,7 +22,11 @@ from alcove.db import (
     _better_alias,
 )
 from alcove.exceptions import StepDefinitionError
-from alcove.partitions import is_partition_version, partition_gitignore_entry
+from alcove.partitions import (
+    is_partition_version,
+    partition_gitignore_entry,
+    remove_orphans,
+)
 from alcove.snapshots import Snapshot
 from alcove.types import StepURI
 from alcove.utils import DATA_IGNORES, checksum_manifest, console
@@ -241,18 +245,30 @@ def snapshot_to_alcove(
 ) -> Snapshot:
     _check_s3_credentials()
 
+    alcove = Alcove()
+
+    # a partition must be named by its date before any default version is
+    # appended, or `foo/2026-1-5` would become a new dataset `foo/2026-1-5/<today>`
+    dataset_name = dataset_name.strip("/")
+    if alcove.is_partitioned(StepURI("snapshot", f"{dataset_name}/*")):
+        raise ValueError(
+            f"snapshot://{dataset_name}/* is partitioned by date, so name the "
+            f"partition this data covers, e.g. {dataset_name}/YYYY-MM-DD"
+        )
+
+    candidate = StepURI("snapshot", dataset_name)
+    if alcove.is_partitioned(candidate) and not is_partition_version(candidate.version):
+        raise ValueError(
+            f"{candidate} is a partition of snapshot://{candidate.base_path}/*, "
+            "so its version must be an ISO date (YYYY-MM-DD)"
+        )
+
     # ensure we are tagging a version on everything
     dataset_name = _maybe_add_version(dataset_name)
 
     # sanity check that it does not exist
-    alcove = Alcove()
     proposed_uri = StepURI("snapshot", dataset_name)
     partitioned = alcove.is_partitioned(proposed_uri)
-    if partitioned and not is_partition_version(proposed_uri.version):
-        raise ValueError(
-            f"{proposed_uri} is a partition of snapshot://{proposed_uri.base_path}/*, "
-            "so its version must be an ISO date (YYYY-MM-DD)"
-        )
 
     if proposed_uri in alcove.steps and not force:
         raise ValueError(f"Dataset already exists in alcove: {proposed_uri}")
@@ -270,6 +286,11 @@ def snapshot_to_alcove(
         for k, v in Snapshot.load(metadata_source.path).get_metadata().items():
             if k not in ["checksum", "manifest", "date_accessed"]:
                 existing_metadata[k] = v
+
+    if partitioned:
+        # a partition is named by the date its data covers, so record
+        # separately when it was fetched
+        existing_metadata["date_accessed"] = datetime.today().strftime("%Y-%m-%d")
 
     # create and add to s3
     print(f"Creating {proposed_uri}")
@@ -337,6 +358,11 @@ def plan_and_run(
         dag[step] = resolve_latest(dependencies, alcove)
 
     dag, _ = expand_wildcards(dag)
+
+    if not dry_run:
+        # data for dropped partitions would otherwise still match their
+        # dataset's glob, here and on every other clone
+        remove_orphans(alcove.steps, dag)
 
     if regex:
         dag = steps.prune_with_regex(dag, regex)
@@ -419,6 +445,13 @@ def audit_alcove(alcove: Alcove, fix: bool = False) -> None:
             continue
         audit_step(step, fix)
         console.print(f"[blue]{'OK':>5}[/blue]   {step}")
+
+    for metadata_file in unreachable_snapshot_metadata(alcove):
+        print(
+            f"WARNING: {metadata_file} is not a step of this alcove: neither "
+            "listed in alcove.yaml nor a date-named partition of a dataset "
+            "declared there as `snapshot://<dataset>/*`"
+        )
 
     # Check .gitignore and .data-files setup
     audit_gitignore_setup(fix)
@@ -630,6 +663,19 @@ def audit_gitignore_setup(fix: bool = False) -> None:
             print(
                 "WARNING: .data-files exists and should be migrated to data/.gitignore"
             )
+
+
+def unreachable_snapshot_metadata(alcove: Alcove) -> list[Path]:
+    "Snapshot metadata files on disk that no step of the alcove refers to."
+    snapshot_dir = Path("data") / "snapshots"
+    unreachable = []
+    for metadata_file in sorted(snapshot_dir.rglob("*.meta.yaml")):
+        rel_path = metadata_file.relative_to(snapshot_dir).as_posix()
+        step = StepURI("snapshot", rel_path.removesuffix(".meta.yaml"))
+        if step not in alcove.steps:
+            unreachable.append(metadata_file)
+
+    return unreachable
 
 
 def audit_step(step: StepURI, fix: bool = False) -> None:

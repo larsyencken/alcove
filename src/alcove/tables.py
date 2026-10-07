@@ -209,9 +209,12 @@ def _dependency_path(uri: StepURI) -> Path:
 
 
 def _dependency_glob_path(versions: list[StepURI]) -> Path:
-    """A glob over several versions of one dataset that matches their data but
-    never their .meta.yaml sidecars, e.g. data/tables/foo/*.parquet or
-    data/snapshots/foo/????-??-??."""
+    """A glob over several versions of one dataset, e.g. data/tables/foo/*.parquet,
+    data/snapshots/foo/????-??-?? or data/snapshots/foo/????-??-??.csv.
+
+    For date-named snapshot versions it matches their data and never their
+    .meta.yaml sidecars. Other version names fall back to `*`, which for
+    directory snapshots also matches the sidecars, as it always has."""
     uri = versions[0]
     if uri.scheme == "snapshot":
         # date-named partitions can be matched exactly; other names can't

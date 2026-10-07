@@ -1,12 +1,22 @@
+import datetime
+import os
 import subprocess
 from pathlib import Path
 
 import polars as pl
 import pytest
-from alcove import plan_and_run, snapshot_to_alcove, steps
+from alcove import (
+    audit_alcove,
+    connect,
+    plan_and_run,
+    snapshot_to_alcove,
+    steps,
+)
 from alcove.artifacts import artifact_path
 from alcove.core import Alcove
+from alcove.partitions import remove_orphans
 from alcove.paths import (
+    ARTIFACT_DIR,
     ARTIFACT_SCRIPT_DIR,
     SNAPSHOT_DIR,
     TABLE_DIR,
@@ -121,22 +131,48 @@ def test_undeclared_datasets_are_still_listed(setup_test_environment):
 def test_partition_must_be_named_by_date(setup_test_environment):
     alcove = Alcove.init()
     declare(alcove, "snapshot://gpu/usage/*")
+    config_before = Path("alcove.yaml").read_text()
 
     Path("x.txt").write_text("x")
-    for bad in ["latest", "2026-02-30", "2026-10-01-extra"]:
+    for bad in ["latest", "2026-02-30", "2026-10-01-extra", "2026-1-5", "20260105"]:
         with pytest.raises(ValueError, match="must be an ISO date"):
             snapshot_to_alcove(Path("x.txt"), f"gpu/usage/{bad}")
 
+    # no default date is filled in for a partition
+    with pytest.raises(ValueError, match="name the partition"):
+        snapshot_to_alcove(Path("x.txt"), "gpu/usage")
 
-def test_stray_metadata_in_partitioned_dataset_raises(setup_test_environment):
+    assert Path("alcove.yaml").read_text() == config_before
+    assert not (SNAPSHOT_DIR / "gpu/usage").exists()
+
+
+def test_partition_records_when_it_was_fetched(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+
+    snapshot = snapshot_day("2026-01-01")
+
+    assert snapshot.date_accessed == datetime.date.today().isoformat()
+
+
+def test_stray_metadata_is_not_a_partition(setup_test_environment, capsys):
     alcove = Alcove.init()
     declare(alcove, "snapshot://gpu/usage/*")
     snapshot_day("2026-10-01")
 
+    # e.g. notes, or a macOS AppleDouble file
     (SNAPSHOT_DIR / "gpu/usage/notes.meta.yaml").write_text("uri: x\n")
+    (SNAPSHOT_DIR / "gpu/usage/._2026-10-01.meta.yaml").write_text("x")
 
-    with pytest.raises(ValueError, match="must be named by an ISO date"):
-        Alcove()
+    alcove = Alcove()
+    assert alcove.versions(StepURI.parse("snapshot://gpu/usage/*")) == ["2026-10-01"]
+
+    # but audit points them out
+    audit_alcove(alcove)
+    out = capsys.readouterr().out
+    assert "notes.meta.yaml is not a step of this alcove" in out
+    assert "._2026-10-01.meta.yaml is not a step of this alcove" in out
+    assert "2026-10-01.meta.yaml is not a step" not in out.replace("._2026", "")
 
 
 def test_new_partition_inherits_dataset_metadata(setup_test_environment):
@@ -396,3 +432,161 @@ def test_steps_built_by_older_alcove_rebuild_once(setup_test_environment):
     save_yaml(meta, meta_path)
 
     assert "table://t/x/latest" in dirty_steps(alcove)
+
+
+# ── dropping partitions, and data no partition owns ──────────────────
+
+
+def test_dropped_partition_disappears_on_every_clone(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(alcove, "table://gpu/usage_all/latest", ["snapshot://gpu/usage/*"])
+    declare(alcove, "table://gpu/clean/*", ["snapshot://gpu/usage/*"])
+    declare(alcove, "table://gpu/rollup/latest", ["table://gpu/clean/*"])
+    write_sql("gpu/usage_all.sql", UNION_SQL)
+    write_sql("gpu/clean.sql", "SELECT * FROM '{usage}/usage.parquet'")
+    write_sql("gpu/rollup.sql", "SELECT count(*) AS n FROM '{clean}'")
+
+    for day in ["2026-10-01", "2026-10-02", "2026-10-03"]:
+        snapshot_day(day)
+    plan_and_run(alcove)
+
+    # another machine drops a day; pulling that change deletes only its
+    # metadata, since the data was never in git
+    (SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml").unlink()
+    plan_and_run(alcove)
+
+    assert not (SNAPSHOT_DIR / "gpu/usage/2026-10-02").exists()
+    assert not (TABLE_DIR / "gpu/clean/2026-10-02.parquet").exists()
+    assert not (TABLE_DIR / "gpu/clean/2026-10-02.meta.yaml").exists()
+
+    df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
+    assert sorted(str(d) for d in df["day"]) == ["2026-10-01", "2026-10-03"]
+    rollup = pl.read_parquet(TABLE_DIR / "gpu/rollup/latest.parquet")
+    assert rollup["n"].to_list() == [2]
+    with connect() as db:
+        assert db.sql("SELECT count(*) AS n FROM gpu_clean")["n"].to_list() == [2]
+
+    assert dirty_steps(alcove) == set()
+
+
+def test_interrupted_snapshot_leaves_no_data_behind(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(alcove, "table://gpu/usage_all/latest", ["snapshot://gpu/usage/*"])
+    write_sql("gpu/usage_all.sql", UNION_SQL)
+    snapshot_day("2026-10-01")
+    snapshot_day("2026-10-02")
+
+    # data copied into place, but the metadata never written
+    snapshot_day("2026-10-03")
+    (SNAPSHOT_DIR / "gpu/usage/2026-10-03.meta.yaml").unlink()
+
+    plan_and_run(alcove)
+
+    df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
+    assert df.height == 2
+
+
+def test_remove_orphans_keeps_metadata_and_nested_datasets(tmp_path):
+    # not monkeypatch.chdir: an earlier test may have deleted the current dir
+    os.chdir(tmp_path)
+
+    def touch(path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+        return path
+
+    usage = SNAPSHOT_DIR / "gpu/usage"
+    keep = [
+        touch(usage / "2026-01-01/usage.parquet"),
+        touch(usage / "2026-01-01.meta.yaml"),
+        # metadata is never deleted, even with no step behind it
+        touch(usage / "2026-01-02.meta.yaml"),
+        # snapshot data not named like a partition is not ours to delete
+        touch(usage / "2025-01-01-v2/usage.parquet"),
+        touch(usage / "notes.txt"),
+        # a dataset nested below an artifact wildcard
+        touch(ARTIFACT_DIR / "rep/sub/latest/index.html"),
+        touch(ARTIFACT_DIR / "rep/2026-01-01/index.html"),
+        touch(ARTIFACT_DIR / "rep/2026-01-03.building/index.html"),
+    ]
+    gone = [
+        touch(usage / "2026-01-03/usage.parquet"),
+        touch(usage / "2026-01-04.parquet"),
+        touch(TABLE_DIR / "gpu/clean/2026-01-03.parquet"),
+        touch(TABLE_DIR / "gpu/clean/2026-01-03.meta.yaml"),
+        touch(ARTIFACT_DIR / "rep/2026-01-03/index.html"),
+        touch(ARTIFACT_DIR / "rep/2026-01-03.meta.yaml"),
+    ]
+
+    S = StepURI.parse
+    declared = {
+        S("snapshot://gpu/usage/*"): [],
+        S("table://gpu/clean/*"): [S("snapshot://gpu/usage/*")],
+        S("artifact://rep/*"): [S("snapshot://gpu/usage/*")],
+        S("artifact://rep/sub/latest"): [],
+    }
+    expanded = {
+        S("snapshot://gpu/usage/2026-01-01"): [],
+        S("table://gpu/clean/2026-01-01"): [S("snapshot://gpu/usage/2026-01-01")],
+        S("artifact://rep/2026-01-01"): [S("snapshot://gpu/usage/2026-01-01")],
+        S("artifact://rep/sub/latest"): [],
+    }
+    remove_orphans(declared, expanded)
+
+    assert all(p.exists() for p in keep)
+    assert not any(p.exists() for p in gone)
+
+
+# ── empty and lagging partitioned inputs ─────────────────────────────
+
+
+def test_connect_before_the_first_partition(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(alcove, "table://gpu/clean/*", ["snapshot://gpu/usage/*"])
+    plan_and_run(alcove)
+
+    with connect() as db:
+        assert "gpu_clean" not in db.tables
+
+
+def test_per_partition_step_waits_for_every_input(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(alcove, "snapshot://spend/levels/*")
+    declare(
+        alcove,
+        "table://joined/*",
+        ["snapshot://gpu/usage/*", "snapshot://spend/levels/*"],
+    )
+    write_sql("joined.sql", "SELECT * FROM '{usage}/usage.parquet'")
+
+    # spend has no partitions yet, so there is nothing to join
+    snapshot_day("2026-10-01")
+    plan_and_run(alcove)
+    assert not (TABLE_DIR / "joined").exists()
+
+    # then spend lags gpu usage by a day
+    snapshot_day("2026-10-02")
+    snapshot_file_day("2026-10-01")
+    plan_and_run(alcove)
+    assert sorted(p.name for p in (TABLE_DIR / "joined").glob("*.parquet")) == [
+        "2026-10-01.parquet"
+    ]
+
+
+def test_undeclared_wildcard_input_with_no_versions_raises(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(
+        alcove,
+        "table://joined/*",
+        ["snapshot://gpu/usage/*", "snapshot://spend/typo/*"],
+    )
+    write_sql("joined.sql", "SELECT 1 AS x")
+    snapshot_day("2026-10-01")
+
+    with pytest.raises(ValueError, match="spend/typo/.*zero concrete versions"):
+        plan_and_run(alcove)
