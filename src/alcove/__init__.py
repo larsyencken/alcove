@@ -256,11 +256,21 @@ def snapshot_to_alcove(
             f"partition this data covers, e.g. {dataset_name}/YYYY-MM-DD"
         )
 
+    # versions listed in alcove.yaml (e.g. from before the dataset was
+    # declared partitioned) are not partitions, and keep their old behaviour
+    listed = set(alcove.steps) - alcove.discovered
+
     candidate = StepURI("snapshot", dataset_name)
-    if alcove.is_partitioned(candidate) and not is_partition_version(candidate.version):
+    if (
+        alcove.is_partitioned(candidate)
+        and candidate not in listed
+        and not is_partition_version(candidate.version)
+    ):
         raise ValueError(
             f"{candidate} is a partition of snapshot://{candidate.base_path}/*, "
-            "so its version must be an ISO date (YYYY-MM-DD)"
+            "so its version must be an ISO date (YYYY-MM-DD). To snapshot a "
+            "dataset nested below it, give that dataset's version too, e.g. "
+            f"{dataset_name}/YYYY-MM-DD"
         )
 
     # ensure we are tagging a version on everything
@@ -268,7 +278,7 @@ def snapshot_to_alcove(
 
     # sanity check that it does not exist
     proposed_uri = StepURI("snapshot", dataset_name)
-    partitioned = alcove.is_partitioned(proposed_uri)
+    partitioned = alcove.is_partitioned(proposed_uri) and proposed_uri not in listed
 
     if proposed_uri in alcove.steps and not force:
         raise ValueError(f"Dataset already exists in alcove: {proposed_uri}")
@@ -358,14 +368,16 @@ def plan_and_run(
         dag[step] = resolve_latest(dependencies, alcove)
 
     dag, _ = expand_wildcards(dag)
-
-    if not dry_run:
-        # data for dropped partitions would otherwise still match their
-        # dataset's glob, here and on every other clone
-        remove_orphans(alcove.steps, dag)
+    expanded = dag
 
     if regex:
         dag = steps.prune_with_regex(dag, regex)
+
+    # files left by a dropped version would otherwise still match their
+    # dataset's glob, here and on every other clone
+    remove_orphans(
+        alcove.steps, expanded, scope=dag if regex else None, dry_run=dry_run
+    )
 
     if not force:
         dag = steps.prune_completed(dag)
@@ -670,9 +682,17 @@ def unreachable_snapshot_metadata(alcove: Alcove) -> list[Path]:
     snapshot_dir = Path("data") / "snapshots"
     unreachable = []
     for metadata_file in sorted(snapshot_dir.rglob("*.meta.yaml")):
-        rel_path = metadata_file.relative_to(snapshot_dir).as_posix()
-        step = StepURI("snapshot", rel_path.removesuffix(".meta.yaml"))
-        if step not in alcove.steps:
+        parts = metadata_file.relative_to(snapshot_dir).parts
+        step = StepURI("snapshot", "/".join(parts).removesuffix(".meta.yaml"))
+        if step in alcove.steps:
+            continue
+
+        # a file inside a directory snapshot's data is not metadata
+        inside_snapshot = any(
+            StepURI("snapshot", "/".join(parts[:i])) in alcove.steps
+            for i in range(1, len(parts))
+        )
+        if not inside_snapshot:
             unreachable.append(metadata_file)
 
     return unreachable

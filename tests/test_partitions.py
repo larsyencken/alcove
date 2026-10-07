@@ -1,5 +1,6 @@
 import datetime
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from alcove import (
 )
 from alcove.artifacts import artifact_path
 from alcove.core import Alcove
-from alcove.partitions import remove_orphans
+from alcove.partitions import OrphanedDataError, remove_orphans
 from alcove.paths import (
     ARTIFACT_DIR,
     ARTIFACT_SCRIPT_DIR,
@@ -437,7 +438,7 @@ def test_steps_built_by_older_alcove_rebuild_once(setup_test_environment):
 # ── dropping partitions, and data no partition owns ──────────────────
 
 
-def test_dropped_partition_disappears_on_every_clone(setup_test_environment):
+def test_dropped_partition_on_another_clone(setup_test_environment):
     alcove = Alcove.init()
     declare(alcove, "snapshot://gpu/usage/*")
     declare(alcove, "table://gpu/usage_all/latest", ["snapshot://gpu/usage/*"])
@@ -454,9 +455,16 @@ def test_dropped_partition_disappears_on_every_clone(setup_test_environment):
     # another machine drops a day; pulling that change deletes only its
     # metadata, since the data was never in git
     (SNAPSHOT_DIR / "gpu/usage/2026-10-02.meta.yaml").unlink()
+
+    # alcove won't read the leftover data, nor delete it
+    with pytest.raises(OrphanedDataError, match="gpu/usage/2026-10-02"):
+        plan_and_run(alcove)
+    assert (SNAPSHOT_DIR / "gpu/usage/2026-10-02/usage.parquet").exists()
+
+    # once it's deleted, what was built from that day goes too
+    shutil.rmtree(SNAPSHOT_DIR / "gpu/usage/2026-10-02")
     plan_and_run(alcove)
 
-    assert not (SNAPSHOT_DIR / "gpu/usage/2026-10-02").exists()
     assert not (TABLE_DIR / "gpu/clean/2026-10-02.parquet").exists()
     assert not (TABLE_DIR / "gpu/clean/2026-10-02.meta.yaml").exists()
 
@@ -470,25 +478,37 @@ def test_dropped_partition_disappears_on_every_clone(setup_test_environment):
     assert dirty_steps(alcove) == set()
 
 
-def test_interrupted_snapshot_leaves_no_data_behind(setup_test_environment):
+def test_unsnapshotted_partition_data_is_kept(setup_test_environment):
     alcove = Alcove.init()
-    declare(alcove, "snapshot://gpu/usage/*")
-    declare(alcove, "table://gpu/usage_all/latest", ["snapshot://gpu/usage/*"])
-    write_sql("gpu/usage_all.sql", UNION_SQL)
-    snapshot_day("2026-10-01")
-    snapshot_day("2026-10-02")
+    declare(alcove, "snapshot://spend/levels/*")
+    declare(alcove, "table://spend/levels_all/latest", ["snapshot://spend/levels/*"])
+    write_sql("spend/levels_all.sql", "SELECT * FROM '{levels}'")
+    snapshot_file_day("2026-10-01")
 
-    # data copied into place, but the metadata never written
-    snapshot_day("2026-10-03")
-    (SNAPSHOT_DIR / "gpu/usage/2026-10-03.meta.yaml").unlink()
+    # e.g. a fetch that writes in place, or a snapshot still being written
+    staged = SNAPSHOT_DIR / "spend/levels/2026-10-02.parquet"
+    pl.DataFrame({"usd": [2.0]}).write_parquet(staged)
 
+    with pytest.raises(OrphanedDataError, match="snapshot it"):
+        plan_and_run(alcove)
+    with pytest.raises(OrphanedDataError):
+        plan_and_run(alcove, dry_run=True)
+    assert staged.exists()
+
+    # a run that doesn't touch the dataset isn't held up
+    declare(alcove, "table://other/latest")
+    write_sql("other.sql", "SELECT 1 AS x")
+    plan_and_run(alcove, regex="other")
+    assert (TABLE_DIR / "other/latest.parquet").exists()
+
+    # snapshotting it in place makes it a partition
+    snapshot_to_alcove(staged, "spend/levels/2026-10-02")
     plan_and_run(alcove)
-
-    df = pl.read_parquet(TABLE_DIR / "gpu/usage_all/latest.parquet")
+    df = pl.read_parquet(TABLE_DIR / "spend/levels_all/latest.parquet")
     assert df.height == 2
 
 
-def test_remove_orphans_keeps_metadata_and_nested_datasets(tmp_path):
+def test_remove_orphans_only_deletes_build_products(tmp_path):
     # not monkeypatch.chdir: an earlier test may have deleted the current dir
     os.chdir(tmp_path)
 
@@ -503,40 +523,103 @@ def test_remove_orphans_keeps_metadata_and_nested_datasets(tmp_path):
         touch(usage / "2026-01-01.meta.yaml"),
         # metadata is never deleted, even with no step behind it
         touch(usage / "2026-01-02.meta.yaml"),
-        # snapshot data not named like a partition is not ours to delete
+        # snapshot data not named like a partition is not ours to judge
         touch(usage / "2025-01-01-v2/usage.parquet"),
         touch(usage / "notes.txt"),
-        # a dataset nested below an artifact wildcard
+        # a concrete table beside the wildcard, and a dataset nested below one
+        touch(TABLE_DIR / "gpu/clean/manual.parquet"),
         touch(ARTIFACT_DIR / "rep/sub/latest/index.html"),
         touch(ARTIFACT_DIR / "rep/2026-01-01/index.html"),
         touch(ARTIFACT_DIR / "rep/2026-01-03.building/index.html"),
+        # what a symlinked orphan points to
+        touch(Path("elsewhere/index.html")),
     ]
     gone = [
-        touch(usage / "2026-01-03/usage.parquet"),
-        touch(usage / "2026-01-04.parquet"),
         touch(TABLE_DIR / "gpu/clean/2026-01-03.parquet"),
         touch(TABLE_DIR / "gpu/clean/2026-01-03.meta.yaml"),
-        touch(ARTIFACT_DIR / "rep/2026-01-03/index.html"),
+        touch(ARTIFACT_DIR / "rep/2026-01-03/index.html").parent,
         touch(ARTIFACT_DIR / "rep/2026-01-03.meta.yaml"),
     ]
+    link = ARTIFACT_DIR / "rep/2026-01-04"
+    link.symlink_to(Path("elsewhere").resolve())
+    gone.append(link)
 
     S = StepURI.parse
     declared = {
         S("snapshot://gpu/usage/*"): [],
         S("table://gpu/clean/*"): [S("snapshot://gpu/usage/*")],
+        S("table://gpu/clean/manual"): [],
         S("artifact://rep/*"): [S("snapshot://gpu/usage/*")],
         S("artifact://rep/sub/latest"): [],
     }
     expanded = {
         S("snapshot://gpu/usage/2026-01-01"): [],
         S("table://gpu/clean/2026-01-01"): [S("snapshot://gpu/usage/2026-01-01")],
+        S("table://gpu/clean/manual"): [],
         S("artifact://rep/2026-01-01"): [S("snapshot://gpu/usage/2026-01-01")],
         S("artifact://rep/sub/latest"): [],
     }
-    remove_orphans(declared, expanded)
 
+    # a dry run only reports
+    remove_orphans(declared, expanded, dry_run=True)
+    assert all(p.exists() or p.is_symlink() for p in keep + gone)
+
+    # a run scoped to other datasets leaves these alone
+    remove_orphans(declared, expanded, scope={S("table://other/latest"): []})
+    assert all(p.exists() or p.is_symlink() for p in keep + gone)
+
+    remove_orphans(declared, expanded)
     assert all(p.exists() for p in keep)
-    assert not any(p.exists() for p in gone)
+    assert not any(p.exists() or p.is_symlink() for p in gone)
+
+    # but partition-shaped snapshot data with no metadata is only reported
+    orphan = touch(usage / "2026-01-03/usage.parquet")
+    with pytest.raises(OrphanedDataError, match="2026-01-03"):
+        remove_orphans(declared, expanded)
+    assert orphan.exists()
+
+
+def test_reference_to_one_version_does_not_narrow_a_wildcard(setup_test_environment):
+    alcove = Alcove.init()
+    declare(alcove, "snapshot://gpu/usage/*")
+    declare(alcove, "table://gpu/clean/*", ["snapshot://gpu/usage/*"])
+    declare(alcove, "table://incident/latest", ["table://gpu/clean/2026-10-02"])
+    write_sql("gpu/clean.sql", "SELECT * FROM '{usage}/usage.parquet'")
+    write_sql("incident.sql", "SELECT * FROM '{clean}'")
+
+    for day in ["2026-10-01", "2026-10-02", "2026-10-03"]:
+        snapshot_day(day)
+    plan_and_run(alcove)
+
+    built = sorted(p.name for p in (TABLE_DIR / "gpu/clean").glob("*.parquet"))
+    assert built == ["2026-10-01.parquet", "2026-10-02.parquet", "2026-10-03.parquet"]
+
+
+def test_listed_versions_of_a_partitioned_dataset_can_be_revised(
+    setup_test_environment,
+):
+    alcove = Alcove.init()
+    Path("x.csv").write_text("a\n1\n")
+    snapshot_to_alcove(Path("x.csv"), "raw/2025-01-01-v2")
+    declare(alcove, "snapshot://raw/*")
+
+    Path("x.csv").write_text("a\n2\n")
+    snapshot_to_alcove(Path("x.csv"), "raw/2025-01-01-v2", force=True)
+
+    assert "snapshot://raw/2025-01-01-v2" in load_yaml(Path("alcove.yaml"))["steps"]
+
+
+def test_audit_ignores_metadata_named_files_inside_snapshot_data(
+    setup_test_environment, capsys
+):
+    Alcove.init()
+    folder = Path("in/configs")
+    folder.mkdir(parents=True)
+    (folder / "model.meta.yaml").write_text("x: 1\n")
+    snapshot_to_alcove(folder, "configs/2026-01-05")
+
+    audit_alcove(Alcove())
+    assert "WARNING" not in capsys.readouterr().out
 
 
 # ── empty and lagging partitioned inputs ─────────────────────────────
