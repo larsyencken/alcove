@@ -33,12 +33,15 @@ def expand_wildcards(dag: Dag) -> tuple[Dag, dict[str, list[str]]]:
         group_key = _group_key(wc_step)
         wildcard_deps = [d for d in wc_deps if d.is_wildcard]
 
-        # Versions come from the step's own concrete siblings or, failing that,
-        # from its wildcard deps: one step per version that every one of them
-        # has, so a step fed by two daily datasets waits for a day until both
-        # have it, instead of depending on a version that doesn't exist.
-        versions = set(_discover_versions(wc_step, expanded))
-        if not versions and wildcard_deps:
+        # A step with wildcard deps gets one version per version that every one
+        # of them has, so a step fed by two daily datasets waits for a day until
+        # both have it, instead of depending on a version that doesn't exist.
+        # Other references to some of its versions don't narrow it down.
+        # Without wildcard deps (e.g. `snapshot://foo/*`), its versions are the
+        # concrete steps that share its base path.
+        if not wildcard_deps:
+            versions = set(_discover_versions(wc_step, expanded))
+        else:
             dep_versions = []
             for dep in wildcard_deps:
                 found = set(_discover_versions(dep, expanded))

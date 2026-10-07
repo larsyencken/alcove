@@ -73,28 +73,46 @@ def partition_gitignore_entry(base_path: str, extension: str | None) -> str:
     return str(folder / f"{PARTITION_GLOB}{extension}")
 
 
-def remove_orphans(declared: Dag, expanded: Dag) -> None:
-    """Delete data in a wildcard dataset's folder that none of its versions
-    owns any more.
+class OrphanedDataError(Exception):
+    "Partition-shaped snapshot data that no partition's metadata accounts for."
 
-    Partition data and the outputs built from each partition are not in git.
-    When a partition is dropped by deleting its metadata, perhaps on another
-    machine and then pulled, or a snapshot is interrupted before its metadata
-    is written, that data stays on disk, where the globs that read a whole
-    dataset at once would still find it.
 
-    Only build products and date-named partition data are touched: snapshot
-    metadata, and any snapshot data not named like a partition, are left be.
+def remove_orphans(
+    declared: Dag,
+    expanded: Dag,
+    scope: Dag | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Deal with files in a wildcard dataset's folder that none of its versions
+    owns any more, before the globs that read a whole dataset can find them.
+
+    This happens when a partition is dropped by deleting its metadata
+    (perhaps on another machine, then pulled; its data was never in git), or
+    a snapshot is interrupted before its metadata is written.
+
+    Tables and artifacts built for a version that's gone are build products,
+    so they are deleted. Snapshot data is never deleted: it could be the only
+    copy of something, such as data staged there before snapshotting or a
+    snapshot still being written. Instead this raises, listing it.
+
+    `scope` limits the clean-up to datasets with steps in it, e.g. the steps
+    a filtered `alcove run` will look at.
     """
+    orphaned_data = []
     for step in declared:
         if not step.is_wildcard:
+            continue
+
+        base = step.base_path
+        if scope is not None and not any(
+            s.scheme == step.scheme and s.base_path == base for s in scope
+        ):
             continue
 
         folder = step.full_path.parent
         if not folder.is_dir():
             continue
 
-        base = step.base_path
         versions = {
             s.version
             for s in expanded
@@ -110,12 +128,33 @@ def remove_orphans(declared: Dag, expanded: Dag) -> None:
         }
         for path in sorted(folder.iterdir()):
             version = _owning_version(step.scheme, path)
-            if version is not None and version not in versions | nested:
+            if version is None or version in versions | nested:
+                continue
+
+            if step.scheme == "snapshot":
+                orphaned_data.append(path)
+            elif dry_run:
+                print_op("WOULD DELETE", path)
+            else:
                 print_op("DELETE", path)
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
+                _delete(path)
+
+    if orphaned_data:
+        listing = "\n".join(f"  {path}" for path in orphaned_data)
+        raise OrphanedDataError(
+            "This data is named like a partition but has no metadata, so it "
+            "isn't one, yet tables reading its dataset would still pick it up:\n"
+            f"{listing}\n"
+            "If it belongs to a partition that was dropped, delete it. If it "
+            "is new data, snapshot it with `alcove snapshot`. Then run again."
+        )
+
+
+def _delete(path: Path) -> None:
+    if path.is_symlink() or not path.is_dir():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
 
 
 def _owning_version(scheme: str, path: Path) -> str | None:
