@@ -15,7 +15,12 @@ from alcove import (
 )
 from alcove.artifacts import artifact_path
 from alcove.core import Alcove
-from alcove.partitions import ORPHANED_DIR, check_contiguous, tidy_orphans
+from alcove.partitions import (
+    ORPHANED_DIR,
+    check_contiguous,
+    compact_steps,
+    tidy_orphans,
+)
 from alcove.paths import (
     ARTIFACT_DIR,
     ARTIFACT_SCRIPT_DIR,
@@ -896,3 +901,42 @@ def test_undeclared_wildcard_input_with_no_versions_raises(setup_test_environmen
 
     with pytest.raises(ValueError, match="spend/typo/.*zero concrete versions"):
         plan_and_run(alcove)
+
+
+def _uris(*uris: str) -> list[StepURI]:
+    return [StepURI.parse(u) for u in uris]
+
+
+def test_compact_steps_collapses_consecutive_days():
+    steps = _uris(
+        "snapshot://gpu/usage/2026-09-30",
+        "snapshot://gpu/usage/2026-10-01",
+        "snapshot://gpu/usage/2026-10-02",
+        "table://gpu/daily/latest",
+    )
+    assert compact_steps(steps) == [
+        "snapshot://gpu/usage/[2026-09-30 -> 2026-10-02]",
+        "table://gpu/daily/latest",
+    ]
+
+
+def test_compact_steps_splits_runs_at_gaps_and_datasets():
+    steps = _uris(
+        "snapshot://a/2026-10-01",
+        "snapshot://a/2026-10-02",
+        "snapshot://a/2026-10-04",
+        "snapshot://b/2026-10-05",
+        "snapshot://b/2026-10-06",
+        "table://b/2026-10-07",
+    )
+    assert compact_steps(steps) == [
+        "snapshot://a/[2026-10-01 -> 2026-10-02]",
+        "snapshot://a/2026-10-04",
+        "snapshot://b/[2026-10-05 -> 2026-10-06]",
+        "table://b/2026-10-07",
+    ]
+
+
+def test_compact_steps_leaves_other_versions_alone():
+    steps = _uris("snapshot://a/2026-10-01", "snapshot://a/v2", "snapshot://b/latest")
+    assert compact_steps(steps) == [str(s) for s in steps]

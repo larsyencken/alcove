@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 
 from alcove.paths import SNAPSHOT_DIR
-from alcove.types import Dag
+from alcove.types import Dag, StepURI
 from alcove.utils import print_op
 
 # Matches a partition's name (and nothing else in its dataset folder, such as
@@ -123,6 +123,50 @@ def _describe_gaps(
         runs.append(f"and {len(gaps) - limit} more gaps")
 
     return f"{n_days} day{'' if n_days == 1 else 's'}: {', '.join(runs)}"
+
+
+def compact_steps(steps: list[StepURI]) -> list[str]:
+    """Steps as `alcove list` shows them, with each run of consecutive daily
+    versions of a dataset collapsed to one line, e.g.
+    `snapshot://gpu/usage/[2026-01-01 -> 2026-10-07]`.
+
+    A missing day splits the run, so gaps still show. Expects `steps` sorted.
+    """
+    lines: list[str] = []
+    run: list[StepURI] = []
+
+    def flush() -> None:
+        if len(run) == 1:
+            lines.append(str(run[0]))
+        elif run:
+            first, last = run[0], run[-1]
+            lines.append(
+                f"{first.scheme}://{first.base_path}/[{first.version} -> {last.version}]"
+            )
+        run.clear()
+
+    one_day = datetime.timedelta(days=1)
+    for step in steps:
+        if not is_partition_version(step.version):
+            flush()
+            lines.append(str(step))
+            continue
+
+        if run:
+            prev = run[-1]
+            follows = (
+                prev.scheme == step.scheme
+                and prev.base_path == step.base_path
+                and datetime.date.fromisoformat(prev.version) + one_day
+                == datetime.date.fromisoformat(step.version)
+            )
+            if not follows:
+                flush()
+
+        run.append(step)
+
+    flush()
+    return lines
 
 
 def partition_gitignore_entry(base_path: str, extension: str | None) -> str:
