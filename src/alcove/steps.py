@@ -67,13 +67,30 @@ def is_completed(step: StepURI, deps: list[StepURI]) -> bool:
     raise ValueError(f"Unknown scheme {step.scheme}")
 
 
-def execute_dag(dag: Dag, dry_run: bool = False) -> None:
-    "Execute the DAG."
+def execute_dag(
+    dag: Dag, dry_run: bool = False, jobs: int = snapshots.DEFAULT_FETCH_JOBS
+) -> None:
+    "Execute the DAG, downloading up to `jobs` snapshot files at once."
     to_execute = in_topological_order(dag)
     print(f"Executing {len(to_execute)} steps")
-    for step in to_execute:
+    if dry_run:
+        for step in to_execute:
+            print(step)
+        return
+
+    # snapshots depend on nothing, so every one can be fetched up front, many
+    # files at a time, instead of one file at a time in step order
+    to_fetch = [step for step in to_execute if step.scheme == "snapshot"]
+    for step in to_fetch:
         print(step)
-        if not dry_run:
+    if to_fetch:
+        snapshots.fetch_snapshots(
+            [snapshots.Snapshot.load(step.path) for step in to_fetch], jobs
+        )
+
+    for step in to_execute:
+        if step.scheme != "snapshot":
+            print(step)
             execute_step(step, dag[step])
 
 

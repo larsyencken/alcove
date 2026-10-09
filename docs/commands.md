@@ -134,3 +134,5 @@ Run the `run` command to fetch any data that's out of date and build any derived
 ```bash
 alcove run
 ```
+
+It downloads the snapshot files it needs before building anything, eight at a time; `--jobs` (`-j`) sets how many.
