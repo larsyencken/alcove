@@ -73,28 +73,6 @@ def minio_container():
         # Wait for MinIO to be ready
         time.sleep(3)
 
-        # Create the test bucket using another container
-        try:
-            bucket_container = client.containers.get("alcove-createbucket")
-            if bucket_container.status != "exited":
-                bucket_container.remove(force=True)
-        except NotFound:
-            pass
-
-        # Create the test bucket
-        bucket_container = client.containers.run(
-            "minio/mc",
-            name="alcove-createbucket",
-            entrypoint=["/bin/sh", "-c"],
-            command=[
-                f"mc config host add myminio http://{container_name}:9000 justtesting justtesting && mc mb myminio/test -p || true"
-            ],
-            network_mode="default",
-            links={container_name: container_name},
-            detach=False,
-            remove=True,
-        )
-
         # Verify MinIO is actually responding
         import socket
 
@@ -105,6 +83,23 @@ def minio_container():
             s.close()
         except Exception as conn_error:
             pytest.fail(f"MinIO container is not responding on port 9000: {conn_error}")
+
+        # Create the test bucket. This used to run `mc config host add` in a
+        # minio/mc container, a command current mc no longer has, and `|| true`
+        # hid the failure: nothing noticed while no test uploaded for real.
+        import boto3
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url="http://localhost:9000",
+            aws_access_key_id="justtesting",
+            aws_secret_access_key="justtesting",
+            region_name="us-east-1",
+        )
+        try:
+            s3.create_bucket(Bucket="test")
+        except s3.exceptions.BucketAlreadyOwnedByYou:
+            pass
 
         # Successfully initialized Docker
         print("Using Docker-managed MinIO for testing")
