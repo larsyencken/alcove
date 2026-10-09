@@ -29,7 +29,7 @@ from alcove.partitions import (
     partition_gitignore_entry,
     tidy_orphans,
 )
-from alcove.snapshots import Snapshot
+from alcove.snapshots import DEFAULT_FETCH_JOBS, Snapshot
 from alcove.types import StepURI
 from alcove.utils import DATA_IGNORES, checksum_manifest, console
 
@@ -86,6 +86,14 @@ def main():
         "--dry-run",
         action="store_true",
         help="Don't execute, just print the steps that would be executed",
+    )
+    run_parser.add_argument(
+        "--jobs",
+        "-j",
+        type=positive_int,
+        default=DEFAULT_FETCH_JOBS,
+        help="How many snapshot files to download at once "
+        f"(default: {DEFAULT_FETCH_JOBS})",
     )
 
     list_parser = subparsers.add_parser(
@@ -191,7 +199,7 @@ def main():
         return list_steps_cmd(alcove, args.regex, args.paths)
 
     elif args.command == "run":
-        return plan_and_run(alcove, args.path, args.force, args.dry_run)
+        return plan_and_run(alcove, args.path, args.force, args.dry_run, args.jobs)
 
     elif args.command == "audit":
         return audit_alcove(alcove, args.fix)
@@ -357,6 +365,7 @@ def plan_and_run(
     regex: str | None = None,
     force: bool = False,
     dry_run: bool = False,
+    jobs: int = DEFAULT_FETCH_JOBS,
 ) -> None:
     # to help unit testing
     alcove.refresh()
@@ -390,7 +399,14 @@ def plan_and_run(
         print("Already up to date!")
         return
 
-    steps.execute_dag(dag, dry_run=dry_run)
+    steps.execute_dag(dag, dry_run=dry_run, jobs=jobs)
+
+
+def positive_int(value: str) -> int:
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, not {n}")
+    return n
 
 
 def resolve_latest(dependencies: list[StepURI], alcove: Alcove) -> list[StepURI]:

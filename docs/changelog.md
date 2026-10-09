@@ -1,5 +1,9 @@
 # Changelog
 
+- `dev`
+    - `alcove run` downloads snapshot files several at a time, 8 by default (`--jobs`/`-j`), and downloads each distinct file once however many snapshots hold it; previously it downloaded one file at a time, making a new S3 client for each. A failed download or Ctrl-C abandons the downloads still in progress rather than waiting for them
+    - A file is added to the local cache under a temporary name and renamed into place, so an interrupted run can't leave a partial file that later reads as a cache hit (it can leave a `*.partial` file beside it, which is never read)
+    - Requires boto3 1.36 or later. 0.5.0 already needed it, since older versions reject the checksum settings alcove passes for B2 ([#60](https://github.com/larsyencken/alcove/issues/60)), but didn't say so
 - `0.5.0` (2026-10-07)
     - Snapshot datasets declared once as `snapshot://foo/*` are date-partitioned: each day is snapshotted as `foo/YYYY-MM-DD`, is discovered from its metadata file rather than listed in `alcove.yaml`, records when it was fetched, and is covered by a single `data/.gitignore` pattern; `alcove run` stops and names any day missing between a dataset's first partition and its last (see [Wildcards](wildcards.md#daily-partitions))
     - `alcove run` moves partition-shaped snapshot data that has no metadata (such as a partition dropped on another clone, or missing from an older branch) into the dataset's `.orphaned/` folder rather than letting its glob read it, restores it when a partition with that content returns, and deletes per-partition tables and artifacts whose version no longer exists; `--dry-run` reports what it would do

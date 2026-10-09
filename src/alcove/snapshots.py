@@ -8,9 +8,11 @@
 import os
 import shutil
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union
 
 import boto3
 import jsonschema
@@ -193,9 +195,15 @@ class Snapshot:
         raise ValueError(f"Unknown snapshot type: {self.snapshot_type}")
 
     def fetch(self) -> None:
+        fetch_snapshots([self])
+
+    def prepare_fetch(self) -> list[tuple[Checksum, Path]]:
+        """Where each of this snapshot's files goes, as (checksum, path) pairs.
+
+        For a directory, first deletes any file in it that isn't in the manifest.
+        """
         if self.snapshot_type == "file":
-            fetch_from_s3(self.checksum, self.path)
-            return
+            return [(self.checksum, self.path)]
 
         elif self.snapshot_type == "directory":
             assert self.manifest is not None
@@ -207,11 +215,83 @@ class Snapshot:
                         print_op("DELETE", file_name)
                         file_name.unlink()
 
-            for file_name, checksum in self.manifest.items():
-                fetch_from_s3(checksum, self.path / file_name)
-            return
+            return [
+                (checksum, self.path / file_name)
+                for file_name, checksum in self.manifest.items()
+            ]
 
         raise ValueError(f"Unknown snapshot type: {self.snapshot_type}")
+
+
+# how many files `alcove run` downloads at once, unless told otherwise
+DEFAULT_FETCH_JOBS = 8
+
+
+def fetch_snapshots(snapshots: list[Snapshot], jobs: int = 1) -> None:
+    """Fetch the data of several snapshots, downloading up to `jobs` files at once.
+
+    Each distinct checksum is fetched by one worker, so no two workers ever
+    write the same file. The first failure, or Ctrl-C, stops the rest: queued
+    files are dropped and downloads in progress are abandoned mid-file.
+    """
+    destinations: dict[Checksum, list[Path]] = {}
+    for snapshot in snapshots:
+        for checksum, dest_path in snapshot.prepare_fetch():
+            destinations.setdefault(checksum, []).append(dest_path)
+
+    session = FetchSession(max_pool_connections=jobs)
+
+    def fetch(checksum: Checksum, dest_paths: list[Path]) -> None:
+        # the first fetch fills the cache, so the rest are copies from it
+        for dest_path in dest_paths:
+            session.check_stopped()
+            fetch_from_s3(checksum, dest_path, session)
+
+    pool = ThreadPoolExecutor(max_workers=jobs)
+    try:
+        futures = [pool.submit(fetch, c, paths) for c, paths in destinations.items()]
+        for future in as_completed(futures):
+            future.result()
+    except BaseException:
+        session.stopped.set()
+        pool.shutdown(cancel_futures=True)
+        raise
+    pool.shutdown()
+
+
+class FetchStopped(Exception):
+    "Another download failed, or the run was interrupted."
+
+
+class FetchSession:
+    """What the workers fetching files share: an S3 client, and a way to stop them.
+
+    boto3 clients are thread-safe once made, but making them isn't. Not making
+    one until a file misses the cache keeps a fully cached run from needing
+    S3 credentials.
+    """
+
+    def __init__(self, max_pool_connections: int = 10) -> None:
+        self._lock = threading.Lock()
+        self._client = None
+        self._max_pool_connections = max_pool_connections
+        self.stopped = threading.Event()
+
+    def client(self) -> Any:
+        with self._lock:
+            if self._client is None:
+                self._client = s3_client(self._max_pool_connections)
+            return self._client
+
+    def check_stopped(self, bytes_transferred: int = 0) -> None:
+        """Raise FetchStopped once the fetch has been stopped.
+
+        Also a download's progress callback: s3transfer calls it as each chunk
+        arrives and fails the download if it raises, so a stopped fetch doesn't
+        wait for whole files to finish downloading.
+        """
+        if self.stopped.is_set():
+            raise FetchStopped()
 
 
 def add_directory_to_s3(file_path: Path) -> dict[FileName, Checksum]:
@@ -272,8 +352,14 @@ def is_completed(uri: StepURI) -> bool:
     return Snapshot.load(uri.path).is_up_to_date()
 
 
-def download_file(s3_path: str, dest_path: Path) -> None:
-    s3 = s3_client()
+def download_file(
+    s3_path: str,
+    dest_path: Path,
+    s3: Any = None,
+    callback: Optional[Callable[[int], None]] = None,
+) -> None:
+    if s3 is None:
+        s3 = s3_client()
 
     bucket_name = os.environ["S3_BUCKET_NAME"]
     dest_path_rel = dest_path.resolve().relative_to(BASE_DIR.resolve())
@@ -283,10 +369,10 @@ def download_file(s3_path: str, dest_path: Path) -> None:
         dest_path_rel,
     )
 
-    s3.download_file(bucket_name, s3_path, str(dest_path))
+    s3.download_file(bucket_name, s3_path, str(dest_path), Callback=callback)
 
 
-def s3_client():
+def s3_client(max_pool_connections: int = 10):
     s3 = boto3.client(
         "s3",
         aws_access_key_id=os.environ["S3_ACCESS_KEY"],
@@ -297,6 +383,10 @@ def s3_client():
         config=Config(
             request_checksum_calculation="when_required",  # ← disable outgoing checksum header
             response_checksum_validation="when_required",  # ← skip checksum validation unless enforced
+            # at least one connection per thread sharing the client; a file
+            # big enough for a multipart download uses up to 10 at once, and
+            # connections beyond the pool are opened and then discarded
+            max_pool_connections=max(10, max_pool_connections),
         ),
     )
     return s3
@@ -314,7 +404,9 @@ def check_local_cache(checksum: Checksum) -> Optional[Path]:
     return None
 
 
-def fetch_from_s3(checksum: Checksum, dest_path: Path) -> None:
+def fetch_from_s3(
+    checksum: Checksum, dest_path: Path, session: Optional[FetchSession] = None
+) -> None:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
     cache_path = check_local_cache(checksum)
@@ -322,15 +414,25 @@ def fetch_from_s3(checksum: Checksum, dest_path: Path) -> None:
         shutil.copy(cache_path, dest_path)
         return
 
+    if session is None:
+        session = FetchSession()
+
     s3_path = f"{checksum[:2]}/{checksum[2:4]}/{checksum}"
-    download_file(s3_path, dest_path)
+    download_file(s3_path, dest_path, session.client(), session.check_stopped)
 
     cache_path = (
         Path.home() / ".cache" / "alcove" / checksum[:2] / checksum[2:4] / checksum
     )
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     print_op("CACHE ADD", f"~/{cache_path.relative_to(Path.home())}")
-    shutil.copy(dest_path, cache_path)
+
+    # a cache hit is never checked against its checksum, so an interrupted
+    # copy must not leave a partial file under the final name
+    partial_path = cache_path.with_name(
+        f"{cache_path.name}.{os.getpid()}.{threading.get_ident()}.partial"
+    )
+    shutil.copy(dest_path, partial_path)
+    os.replace(partial_path, cache_path)
 
 
 def prune_empty_values(record):
