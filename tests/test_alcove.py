@@ -12,6 +12,7 @@ from alcove import (
     list_steps,
     plan_and_run,
     snapshot_to_alcove,
+    steps,
 )
 from alcove.paths import BASE_DIR, TABLE_SCRIPT_DIR
 from alcove.types import StepURI
@@ -332,6 +333,28 @@ def test_list_datasets_with_paths(setup_test_environment):
         uri1.rel_path,
         uri2.rel_path,
     ]
+
+
+def test_list_datasets_in_dependency_order():
+    a_snap = StepURI.parse("snapshot://z/raw/2024-07-26")
+    b_snap = StepURI.parse("snapshot://z/raw/2024-07-27")
+    other = StepURI.parse("snapshot://y/other/latest")
+    clean = StepURI.parse("table://a/clean/latest")
+    report = StepURI.parse("artifact://a/report/latest")
+    dag = {
+        report: [clean],
+        clean: [StepURI.parse("snapshot://z/raw/latest"), other],
+        a_snap: [],
+        b_snap: [],
+        other: [],
+    }
+    assert steps.in_dataset_order(dag) == [other, a_snap, b_snap, clean, report]
+
+
+def test_list_datasets_that_feed_each_other():
+    a1, b1, a2 = (StepURI.parse(f"table://{p}") for p in ("a/v1", "b/v1", "a/v2"))
+    dag = {a1: [], b1: [a1], a2: [b1]}
+    assert steps.in_dataset_order(dag) == [a1, a2, b1]
 
 
 def test_get_only_out_of_date_datasets(setup_test_environment):

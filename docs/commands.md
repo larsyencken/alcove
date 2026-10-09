@@ -9,7 +9,7 @@ Alcove provides the following commands:
 | `alcove init` | Initialize a new alcove workspace |
 | `alcove snapshot <path> <dataset>` | Add a file or directory to your alcove |
 | `alcove run` | Build all tables and fetch outdated data |
-| `alcove list` | List all datasets in alphabetical order |
+| `alcove list` | List all datasets, dependencies first, with consecutive days collapsed into one range (`--full` lists each one) |
 | `alcove audit` | Validate the alcove metadata |
 | `alcove new-table <path> [deps...]` | Create a new derived table |
 | `alcove new-artifact <path> [deps...]` | Create a derived output that is not a table |

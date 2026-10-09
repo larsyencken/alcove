@@ -108,6 +108,8 @@ from alcove.types import StepURI
 have = set(Alcove().versions(StepURI.parse("snapshot://gpu/usage/*")))
 ```
 
+`alcove list` shows the days you have as ranges, e.g. `snapshot://gpu/usage/[2026-01-01 -> 2026-10-07]`; add `--full` to list each day.
+
 ### Read every day in one table
 
 ```yaml

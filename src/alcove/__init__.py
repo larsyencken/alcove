@@ -25,6 +25,7 @@ from alcove.exceptions import StepDefinitionError
 from alcove.partitions import (
     ORPHANED_DIR,
     check_contiguous,
+    compact_steps,
     is_partition_version,
     partition_gitignore_entry,
     tidy_orphans,
@@ -97,7 +98,8 @@ def main():
     )
 
     list_parser = subparsers.add_parser(
-        "list", help="List all datasets in alphabetical order"
+        "list",
+        help="List all datasets, each after the datasets it depends on",
     )
     list_parser.add_argument(
         "regex",
@@ -108,7 +110,18 @@ def main():
     list_parser.add_argument(
         "--paths",
         action="store_true",
-        help="Return relative paths instead of URIs",
+        help="Return relative paths instead of URIs (implies --full)",
+    )
+    list_parser.add_argument(
+        "--full",
+        action="store_true",
+        help="List every version, rather than collapsing consecutive days "
+        "into one line",
+    )
+    list_parser.add_argument(
+        "--alphabetical",
+        action="store_true",
+        help="List in alphabetical order rather than dependency order",
     )
 
     subparsers.add_parser(
@@ -196,7 +209,9 @@ def main():
         return
 
     elif args.command == "list":
-        return list_steps_cmd(alcove, args.regex, args.paths)
+        return list_steps_cmd(
+            alcove, args.regex, args.paths, args.full, args.alphabetical
+        )
 
     elif args.command == "run":
         return plan_and_run(alcove, args.path, args.force, args.dry_run, args.jobs)
@@ -340,24 +355,55 @@ def snapshot_to_alcove(
 
 
 def list_steps_cmd(
-    alcove: Alcove, regex: str | None = None, paths: bool = False
+    alcove: Alcove,
+    regex: str | None = None,
+    paths: bool = False,
+    full: bool = False,
+    alphabetical: bool = False,
 ) -> None:
-    for step in list_steps(alcove, regex, paths):
-        print(step)
+    uris = _matching_steps(alcove, regex, alphabetical)
+
+    lines: list[str] | list[Path]
+    if paths:
+        # paths are for scripts, which need every one
+        lines = [s.rel_path for s in uris]
+    elif full:
+        lines = [str(s) for s in uris]
+    else:
+        lines = compact_steps(uris)
+
+    for line in lines:
+        print(line)
 
 
 def list_steps(
-    alcove: Alcove, regex: str | None = None, paths: bool = False
+    alcove: Alcove,
+    regex: str | None = None,
+    paths: bool = False,
+    alphabetical: bool = False,
 ) -> list[Path] | list[StepURI]:
-    steps = sorted(s for s in alcove.steps if not s.is_wildcard)
-
-    if regex:
-        steps = [s for s in steps if re.search(regex, str(s))]
+    found = _matching_steps(alcove, regex, alphabetical)
 
     if paths:
-        steps = [s.rel_path for s in steps]
+        return [s.rel_path for s in found]
 
-    return steps
+    return found
+
+
+def _matching_steps(
+    alcove: Alcove, regex: str | None, alphabetical: bool
+) -> list[StepURI]:
+    if alphabetical:
+        found = sorted(alcove.steps)
+    else:
+        found = steps.in_dataset_order(alcove.steps)
+
+    found = [s for s in found if not s.is_wildcard]
+
+    if regex:
+        found = [s for s in found if re.search(regex, str(s))]
+
+    return found
 
 
 def plan_and_run(

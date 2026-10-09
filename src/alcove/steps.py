@@ -115,3 +115,41 @@ def in_topological_order(dag: Dag) -> List[StepURI]:
     return [
         step for step in graphlib.TopologicalSorter(dag).static_order() if step in dag
     ]
+
+
+def in_dataset_order(dag: Dag) -> List[StepURI]:
+    """Steps with each dataset after the datasets it depends on, and every
+    version of a dataset together, e.g. for `alcove list`.
+
+    A dataset's depth is the longest chain of datasets that feeds it, so
+    snapshots come first. Ties are broken by URI. If datasets feed each other
+    in a cycle, this falls back to sorting by URI.
+    """
+    feeds: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for step, deps in dag.items():
+        key = _dataset_key(step)
+        feeds.setdefault(key, set())
+        for dep in deps:
+            dep_key = _dataset_key(dep)
+            feeds.setdefault(dep_key, set())
+            # one version of a dataset may be built from an earlier one
+            if dep_key != key:
+                feeds[key].add(dep_key)
+
+    try:
+        order = list(graphlib.TopologicalSorter(feeds).static_order())
+    except graphlib.CycleError:
+        # two datasets can each be built from a version of the other without
+        # any step depending on itself; there's no dataset order to give then
+        return sorted(dag)
+
+    depth: dict[tuple[str, str], int] = {}
+    for key in order:
+        depth[key] = 1 + max((depth[d] for d in feeds[key]), default=-1)
+
+    return sorted(dag, key=lambda s: (depth[_dataset_key(s)], s.uri))
+
+
+def _dataset_key(step: StepURI) -> tuple[str, str]:
+    "Every version of a dataset, `latest` and `*` included, shares this key."
+    return (step.scheme, step.base_path)

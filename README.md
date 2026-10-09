@@ -266,7 +266,7 @@ Alcove provides the following commands:
 - `alcove init` - Initialize a new alcove workspace
 - `alcove snapshot <path> <dataset>` - Add a file or directory to your alcove
 - `alcove run` - Build all tables and fetch outdated data
-- `alcove list` - List all datasets in alphabetical order
+- `alcove list` - List all datasets, dependencies first, with consecutive days collapsed into one range (`--full` lists each one)
 - `alcove audit` - Validate the alcove metadata
 - `alcove new-table <path> [deps...]` - Create a new derived table
 - `alcove new-artifact <path> [deps...]` - Create a derived output that is not a table
@@ -323,6 +323,8 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
+- `dev`
+  - `alcove list` collapses each run of consecutive daily versions of a dataset into one line, e.g. `snapshot://gpu/usage/[2026-01-01 -> 2026-10-07]`, and lists datasets after the datasets they depend on; `--full` lists every version and `--alphabetical` restores the old order. `--paths` still lists every path. `list_steps()` in Python also returns dependency order unless given `alphabetical=True`
 - `0.5.1` (2026-10-09)
   - `alcove run` downloads snapshot files several at a time, 8 by default (`--jobs`/`-j`), and downloads each distinct file once however many snapshots hold it; previously it downloaded one file at a time, making a new S3 client for each. A failed download or Ctrl-C abandons the downloads still in progress rather than waiting for them
   - A file is added to the local cache under a temporary name and renamed into place, so an interrupted run can't leave a partial file that later reads as a cache hit (it can leave a `*.partial` file beside it, which is never read)
