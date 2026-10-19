@@ -69,9 +69,10 @@ class RenamePlan:
 
     def moved(self, path: Path) -> Path:
         "Where a file will be once the rename is done."
-        for src, dest in self.moves:
-            if path == src or path.is_relative_to(src):
-                return dest / path.relative_to(src)
+        moves = dict(self.moves)
+        for src in [path, *path.parents]:
+            if src in moves:
+                return moves[src] / path.relative_to(src)
         return path
 
     @property
@@ -88,6 +89,10 @@ def rename_dataset(alcove: Alcove, old: str, new: str, dry_run: bool = False) ->
         print_op("MOVE", f"{src} -> {dest}")
 
     if dry_run:
+        for link, target, absolute in _links_to_repoint(plan):
+            if not absolute:
+                target = Path(os.path.relpath(target, link.parent))
+            print_op("UPDATE", f"{link} -> {target}")
         for path in plan.rewritten:
             print_op("UPDATE", _describe_update(plan, path))
         print_op("UPDATE", alcove.config_file)
