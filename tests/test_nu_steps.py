@@ -4,11 +4,12 @@ as a Python step: each dependency's path, then the output path."""
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import polars as pl
 import pytest
-from alcove import plan_and_run, steps
+from alcove import main, plan_and_run, steps
 from alcove.artifacts import artifact_path
 from alcove.core import Alcove
 from alcove.paths import ARTIFACT_SCRIPT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
@@ -52,6 +53,13 @@ def main [...args: path] {
 FAIL = """#!/usr/bin/env nu
 def main [...args: path] {
     error make {msg: "boom"}
+}
+"""
+
+FAIL_WITH_CODE = """#!/usr/bin/env nu
+def main [...args: path] {
+    print -e "boom"
+    exit 3
 }
 """
 
@@ -128,6 +136,25 @@ def test_failing_nu_step_fails_the_build(setup_test_environment):
         plan_and_run(alcove)
 
     assert not artifact_path(uri).exists()
+
+
+@needs_nu
+def test_failing_step_shows_only_its_own_error(
+    setup_test_environment, monkeypatch, capfd
+):
+    uri = StepURI.parse("table://report/latest")
+    write_script(TABLE_SCRIPT_DIR, uri, FAIL_WITH_CODE, ".nu")
+    Alcove.init().new_table(uri.path, [])
+
+    monkeypatch.setattr(sys, "argv", ["alcove", "run"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 3
+    err = capfd.readouterr().err
+    assert "boom" in err
+    assert "Traceback" not in err
+    assert "CalledProcessError" not in err
 
 
 def test_nu_step_without_nushell(setup_test_environment, monkeypatch):

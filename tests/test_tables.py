@@ -1,8 +1,11 @@
 import random
+import sys
 from typing import Any, Optional
 
 import polars as pl
 import pytest
+from alcove import main
+from alcove.core import Alcove
 from alcove.paths import SNAPSHOT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
 from alcove.tables import _metadata_path, build_table
 from alcove.types import StepURI
@@ -256,3 +259,28 @@ def random_path() -> str:
 
 def random_date() -> str:
     return f"{random.randint(2000, 2021)}-{random.randint(1, 12):02d}-{random.randint(1, 28):02d}"
+
+
+def test_step_killed_by_signal_says_so(setup_test_environment, monkeypatch, capfd):
+    uri = StepURI.parse("table://dataset/latest")
+    script_path = TABLE_SCRIPT_DIR / "dataset/latest.py"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(
+        """#!/usr/bin/env python3
+import os
+import signal
+
+os.kill(os.getpid(), signal.SIGKILL)
+"""
+    )
+    script_path.chmod(0o755)
+    Alcove.init().new_table(uri.path, [])
+
+    monkeypatch.setattr(sys, "argv", ["alcove", "run"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 128 + 9
+    err = capfd.readouterr().err
+    assert "killed by SIGKILL" in err
+    assert "Traceback" not in err

@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import signal
 import subprocess
 import tempfile
 from datetime import datetime
@@ -21,7 +22,7 @@ from alcove.db import (
     _table_aliases,
     _better_alias,
 )
-from alcove.exceptions import StepDefinitionError
+from alcove.exceptions import StepDefinitionError, StepScriptError
 from alcove.partitions import (
     ORPHANED_DIR,
     check_contiguous,
@@ -48,6 +49,23 @@ load_dotenv(find_dotenv(usecwd=True))
 
 
 BLACKLIST = [".DS_Store"]
+
+
+def _exit_for_failed_script(parser: argparse.ArgumentParser, e: StepScriptError):
+    "Exit as the failed step script did, without a traceback through alcove."
+    if e.returncode > 0:
+        # the script already printed its own error; a traceback would bury it
+        parser.exit(e.returncode)
+
+    # killed by a signal, e.g. for running out of memory, so the script
+    # couldn't say what went wrong
+    try:
+        name = signal.Signals(-e.returncode).name
+    except ValueError:
+        name = f"signal {-e.returncode}"
+    parser.exit(
+        128 - e.returncode, f"alcove: error: the step's script was killed by {name}\n"
+    )
 
 
 def main():
@@ -244,13 +262,19 @@ def main():
         )
 
     elif args.command == "run":
-        return plan_and_run(alcove, args.path, args.force, args.dry_run, args.jobs)
+        try:
+            return plan_and_run(alcove, args.path, args.force, args.dry_run, args.jobs)
+        except StepScriptError as e:
+            _exit_for_failed_script(parser, e)
 
     elif args.command == "audit":
         return audit_alcove(alcove, args.fix)
 
     elif args.command == "export-duckdb":
-        return export_duckdb(alcove, args.db_file, args.short)
+        try:
+            return export_duckdb(alcove, args.db_file, args.short)
+        except StepScriptError as e:
+            _exit_for_failed_script(parser, e)
 
     elif args.command == "db":
         if args.query:
