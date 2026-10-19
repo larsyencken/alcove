@@ -154,8 +154,8 @@ def plan_rename(alcove: Alcove, old: str, new: str) -> RenamePlan:
         dag = _expanded_dag(alcove)
     except ValueError as e:
         raise ValueError(
-            f"Cannot work out what each step reads, to update SQL template "
-            f"variables: {e}"
+            f"Cannot rename while the steps can't be resolved, as `alcove run` "
+            f"would also fail: {e}"
         )
 
     if old_uri.scheme == "snapshot":
@@ -176,12 +176,12 @@ def plan_rename(alcove: Alcove, old: str, new: str) -> RenamePlan:
     if old_uri.scheme != "snapshot":
         script_root = _script_dir(old_uri)
         _plan_folder_moves(script_root, versions, plan)
-        _check_free(script_root, _nested(new_uri, every_uri), plan)
         # a script shared by every version, e.g. foo.sql for table://foo/*
         for suffix in SCRIPT_SUFFIXES:
             shared = script_root / f"{old_uri.path}{suffix}"
             if shared.exists():
                 plan.moves.append((shared, script_root / f"{new_uri.path}{suffix}"))
+        _check_free(script_root, _nested(new_uri, every_uri), plan)
 
     # check every destination up front, so a rename never stops half done
     for src, dest in plan.moves:
@@ -465,11 +465,20 @@ def _describe_update(plan: RenamePlan, path: Path) -> str:
 
 def _execute(alcove: Alcove, plan: RenamePlan) -> None:
     for src, dest in plan.moves:
+        links = _outward_links(src)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dest)
         _remove_empty_parents(src.parent)
+        _repoint_links(src, dest, links)
 
     for path in plan.rewritten:
+        if path.is_symlink():
+            # writing would change the file it points at, outside the dataset
+            plan.warnings.append(
+                f"{path} is a symlink, so it was left as it is; update what it "
+                f"points at yourself if it refers to {plan.new}"
+            )
+            continue
         try:
             path.write_text(_rewrite(plan, path, path.read_text()))
         except ValueError:
@@ -494,6 +503,34 @@ def _execute(alcove: Alcove, plan: RenamePlan) -> None:
     alcove.discovered = set()
     alcove.save()
     alcove.refresh()
+
+
+def _outward_links(src: Path) -> dict[Path, Path]:
+    """Relative symlinks in what's being moved that point outside it, such as
+    a template shared between step folders, and the path each points at."""
+    candidates = [src] if src.is_symlink() or not src.is_dir() else []
+    if src.is_dir() and not src.is_symlink():
+        candidates += [p for p in src.rglob("*") if p.is_symlink()]
+
+    links = {}
+    for link in candidates:
+        if not link.is_symlink():
+            continue
+        target = Path(os.readlink(link))
+        if target.is_absolute():
+            continue
+        resolved = Path(os.path.normpath(link.parent / target))
+        if link == src or not resolved.is_relative_to(src):
+            links[link] = resolved
+    return links
+
+
+def _repoint_links(src: Path, dest: Path, links: dict[Path, Path]) -> None:
+    "Keep moved relative symlinks pointing where they did."
+    for link, target in links.items():
+        moved = dest / link.relative_to(src)
+        moved.unlink()
+        moved.symlink_to(os.path.relpath(target, moved.parent))
 
 
 def _remove_empty_parents(folder: Path) -> None:
@@ -552,6 +589,9 @@ def _references_left(plan: RenamePlan, config_file: Path, dry_run: bool) -> list
         # views in `alcove db`, e.g. foo_bar_latest
         patterns.append(rf"\b{re.escape(old.replace('/', '_'))}_")
     regex = re.compile("|".join(patterns))
+    # the new name may contain the old one, e.g. foo -> archive/foo, and
+    # mentions of it are not left over
+    new_regex = re.compile(rf"(?<![\w-]){re.escape(plan.new.path)}(?![\w-])")
 
     skip = {config_file, DATA_DIR / ".gitignore"}
     found = []
@@ -568,10 +608,18 @@ def _references_left(plan: RenamePlan, config_file: Path, dry_run: bool) -> list
         except (UnicodeDecodeError, ValueError, OSError):
             continue
         for i, line in enumerate(text.splitlines(), 1):
-            # the new name may contain the old one, e.g. foo -> archive/foo
-            if regex.search(line.replace(plan.new.path, "")):
+            if any(
+                not _within(m.span(), new_regex, line) for m in regex.finditer(line)
+            ):
                 found.append(f"{path}:{i}: {line.strip()}")
     return found
+
+
+def _within(span: tuple[int, int], regex: re.Pattern, line: str) -> bool:
+    "Is this span of the line inside a match of regex?"
+    return any(
+        m.start() <= span[0] and span[1] <= m.end() for m in regex.finditer(line)
+    )
 
 
 def _project_files() -> list[Path]:

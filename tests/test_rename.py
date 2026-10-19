@@ -348,3 +348,38 @@ def test_dry_run_reports_the_same_leftovers(project, capsys, in_git):
     dry = leftovers(True)
     assert "notes café.md:1:" in dry
     assert dry == leftovers(False)
+
+
+def test_leftovers_found_when_the_new_name_is_inside_the_old(project, capsys):
+    Path("analysis.py").write_text('read("data/tables/geo/countries/latest.parquet")\n')
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/count")
+    assert "analysis.py:1:" in capsys.readouterr().out.split("still mention")[-1]
+
+
+def test_rename_out_of_a_folder_with_a_shared_script(offline, tmp_path):
+    "table://foo/x/* is built by foo/x.sql, which moves to foo.sql."
+    init_alcove(StorageConfig("local"))
+    alcove = Alcove()
+    alcove.steps[alcove_uri("snapshot://usage/*")] = []
+    alcove.save()
+    add_countries(tmp_path, "usage/2024-01-01")
+    new_table(Alcove(), "foo/x/*", ["snapshot://usage/*"], "sql")
+
+    rename_dataset(Alcove(), "table://foo/x", "table://foo")
+
+    assert Path("src/steps/tables/foo.sql").exists()
+    plan_and_run(Alcove())
+    assert Path("data/tables/foo/2024-01-01.parquet").exists()
+
+
+def test_rename_keeps_relative_symlinks_pointing_out_of_a_step_folder(project):
+    shared = Path("src/steps/tables/shared/note.txt")
+    shared.parent.mkdir(parents=True)
+    shared.write_text("hello")
+    link = Path("src/steps/tables/geo/countries/latest.txt")
+    link.symlink_to("../../shared/note.txt")
+
+    rename_dataset(Alcove(), "table://geo/countries", "table://a/b/nations")
+
+    moved = Path("src/steps/tables/a/b/nations/latest.txt")
+    assert moved.is_symlink() and moved.read_text() == "hello"
