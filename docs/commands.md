@@ -13,6 +13,7 @@ Alcove provides the following commands:
 | `alcove audit` | Validate the alcove metadata |
 | `alcove new-table <path> [deps...] --lang <lang>` | Create a new derived table |
 | `alcove new-artifact <path> [deps...]` | Create a derived output that is not a table |
+| `alcove rename <old> <new>` | Rename a snapshot, table or artifact, and update what depends on it |
 | `alcove db [query]` | Open a DuckDB shell or execute a query |
 | `alcove export-duckdb <file>` | Export tables to a DuckDB file |
 
@@ -134,3 +135,23 @@ alcove run
 ```
 
 It downloads the snapshot files it needs before building anything, eight at a time; `--jobs` (`-j`) sets how many.
+
+## Renaming a dataset
+
+To rename a snapshot, table or artifact, give its old and new names, with their scheme and without a version:
+
+```bash
+alcove rename table://spend/daily table://spend/user_days
+```
+
+Every version of the dataset is renamed together (`latest`, dated versions and `*`). Alcove updates the places it manages:
+
+- the dataset's steps in `alcove.yaml`, and every dependency on them
+- for a table or artifact, the script or step folder that builds it, and its `.meta.yaml` config
+- for a snapshot, its metadata files (which keep their checksums, so nothing is uploaded again), any data already fetched, and its `data/.gitignore` entries
+- template variables in the SQL steps that read it, e.g. `{daily}` becomes `{user_days}`. Renaming a dependency can rename another dependency's variable too, when the two names start or stop clashing; `alcove rename` prints each variable it changes
+- `inherit` keys in table configs that name it
+
+Built tables and artifacts move to the new name, and are rebuilt on the next `alcove run`, along with everything downstream of them.
+
+Alcove leaves alone text it doesn't manage, such as a Python script that reads a table by its path, a snapshot script that names its dataset, or a query against a `alcove db` view. Afterwards it lists each line in the project's files that still mentions the old name, so you can check them. Use `--dry-run` to see what would change first.

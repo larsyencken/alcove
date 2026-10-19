@@ -292,6 +292,7 @@ Alcove provides the following commands:
 - `alcove audit` - Validate the alcove metadata
 - `alcove new-table <path> [deps...] --lang <lang>` - Create a new derived table
 - `alcove new-artifact <path> [deps...]` - Create a derived output that is not a table
+- `alcove rename <old> <new>` - Rename a snapshot, table or artifact, and update what depends on it
 - `alcove db [query]` - Open a DuckDB shell or execute a query
 - `alcove export-duckdb <file>` - Export tables to a DuckDB file
 
@@ -346,6 +347,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 ## Changelog
 
 - `dev`
+  - Added `alcove rename <old> <new>`, which renames every version of a snapshot, table or artifact, and updates `alcove.yaml`, its scripts or snapshot metadata, the template variables of SQL steps that read it, and `inherit` keys naming it; it lists the lines in other files that still mention the old name (see [Renaming a dataset](docs/commands.md#renaming-a-dataset))
   - When a step's Python or nushell script fails, `alcove run` and `alcove export-duckdb` exit with the script's own error message and exit code, instead of following it with a Python traceback ending in `CalledProcessError`; a script killed by a signal gets a one-line `killed by SIGKILL`-style error and exit code 128+N
   - `alcove snapshot` rejects names that tables could not depend on (hyphens outside the final version segment, e.g. `secrets/h100-prime-002/2026-10-15-1900`) before uploading anything, suggesting the underscored name; previously it accepted them and `alcove new-table` later failed with a schema traceback. `new-table` and `new-artifact` give the same error for such dependencies, and now also refuse such names for the new step itself. `alcove.yaml` and step metadata files now reject such names when loaded, so a project that has them fails with a schema error until they are renamed
   - Snapshot data can be kept in a local directory (`alcove init --storage local`) or in the git repo itself under `refs/alcove/blobs` (`alcove init --storage git`), as well as in S3; the choice is saved as `storage` in `alcove.yaml`, and neither needs S3 credentials or uses `~/.cache/alcove`

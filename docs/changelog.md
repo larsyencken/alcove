@@ -1,6 +1,7 @@
 # Changelog
 
 - `dev`
+    - Added `alcove rename <old> <new>`, which renames every version of a snapshot, table or artifact, and updates `alcove.yaml`, its scripts or snapshot metadata, the template variables of SQL steps that read it, and `inherit` keys naming it; it lists the lines in other files that still mention the old name (see [Renaming a dataset](commands.md#renaming-a-dataset))
     - `alcove snapshot` rejects names that tables could not depend on (hyphens outside the final version segment, e.g. `secrets/h100-prime-002/2026-10-15-1900`) before uploading anything, suggesting the underscored name; previously it accepted them and `alcove new-table` later failed with a schema traceback. `new-table` and `new-artifact` give the same error for such dependencies, and now also refuse such names for the new step itself. `alcove.yaml` and step metadata files now reject such names when loaded, so a project that has them fails with a schema error until they are renamed
     - `alcove run` downloads snapshot files several at a time, 8 by default (`--jobs`/`-j`), and downloads each distinct file once however many snapshots hold it; previously it downloaded one file at a time, making a new S3 client for each. A failed download or Ctrl-C abandons the downloads still in progress rather than waiting for them
     - A file is added to the local cache under a temporary name and renamed into place, so an interrupted run can't leave a partial file that later reads as a cache hit (it can leave a `*.partial` file beside it, which is never read)
