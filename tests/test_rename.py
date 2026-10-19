@@ -383,3 +383,25 @@ def test_rename_keeps_relative_symlinks_pointing_out_of_a_step_folder(project):
 
     moved = Path("src/steps/tables/a/b/nations/latest.txt")
     assert moved.is_symlink() and moved.read_text() == "hello"
+
+
+def test_rename_keeps_symlinks_between_parts_of_the_dataset(project, capsys):
+    "A version's script linking to another version's moves with it."
+    alcove = Alcove()
+    alcove.new_table("geo/countries/v2024", ["snapshot://countries/latest"])
+    write_sql("geo/countries/v2024.sql", "SELECT * FROM '{countries}'\n")
+    script = Path("src/steps/tables/geo/countries/latest.sql")
+    script.unlink()
+    script.symlink_to("v2024.sql")
+    shared = Path("src/steps/tables/geo/countries/shared.txt")
+    shared.write_text("x")
+    absolute = Path("src/steps/tables/geo/countries/abs.txt")
+    absolute.symlink_to(shared.resolve())
+
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+
+    moved = Path("src/steps/tables/geo/nations/latest.sql")
+    assert moved.resolve() == Path("src/steps/tables/geo/nations/v2024.sql").resolve()
+    assert Path("src/steps/tables/geo/nations/abs.txt").read_text() == "x"
+    assert "is a symlink" not in capsys.readouterr().out
+    plan_and_run(Alcove())

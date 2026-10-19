@@ -465,14 +465,18 @@ def _describe_update(plan: RenamePlan, path: Path) -> str:
 
 def _execute(alcove: Alcove, plan: RenamePlan) -> None:
     for src, dest in plan.moves:
-        links = _outward_links(src)
+        links = _outward_links(src, plan)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dest)
         _remove_empty_parents(src.parent)
         _repoint_links(src, dest, links)
 
+    real = {p.resolve() for p in plan.rewritten if not p.is_symlink()}
     for path in plan.rewritten:
         if path.is_symlink():
+            if path.resolve() in real:
+                # what it points at is rewritten in its own right
+                continue
             # writing would change the file it points at, outside the dataset
             plan.warnings.append(
                 f"{path} is a symlink, so it was left as it is; update what it "
@@ -505,32 +509,45 @@ def _execute(alcove: Alcove, plan: RenamePlan) -> None:
     alcove.refresh()
 
 
-def _outward_links(src: Path) -> dict[Path, Path]:
-    """Relative symlinks in what's being moved that point outside it, such as
-    a template shared between step folders, and the path each points at."""
+def _outward_links(src: Path, plan: RenamePlan) -> dict[Path, Path]:
+    """Symlinks in what's being moved whose target would no longer be where
+    they point once everything has moved, and where each should point: a
+    relative link leaving the moved tree, such as a template shared between
+    step folders, or any link into a part of the dataset that moves."""
     candidates = [src] if src.is_symlink() or not src.is_dir() else []
     if src.is_dir() and not src.is_symlink():
         candidates += [p for p in src.rglob("*") if p.is_symlink()]
 
+    cwd = Path.cwd()
     links = {}
     for link in candidates:
         if not link.is_symlink():
             continue
         target = Path(os.readlink(link))
-        if target.is_absolute():
-            continue
         resolved = Path(os.path.normpath(link.parent / target))
-        if link == src or not resolved.is_relative_to(src):
-            links[link] = resolved
+        if target.is_absolute():
+            if not resolved.is_relative_to(cwd):
+                continue
+            resolved = resolved.relative_to(cwd)
+        # where its target will be, which may itself move
+        new_target = plan.moved(resolved)
+        if target.is_absolute():
+            if new_target != resolved:
+                links[link] = cwd / new_target
+        elif link == src or not resolved.is_relative_to(src):
+            links[link] = new_target
     return links
 
 
 def _repoint_links(src: Path, dest: Path, links: dict[Path, Path]) -> None:
-    "Keep moved relative symlinks pointing where they did."
+    "Point moved symlinks where their targets are now."
     for link, target in links.items():
         moved = dest / link.relative_to(src)
         moved.unlink()
-        moved.symlink_to(os.path.relpath(target, moved.parent))
+        if target.is_absolute():
+            moved.symlink_to(target)
+        else:
+            moved.symlink_to(os.path.relpath(target, moved.parent))
 
 
 def _remove_empty_parents(folder: Path) -> None:
