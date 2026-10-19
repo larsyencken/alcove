@@ -5,6 +5,8 @@ import pytest
 import time
 import shutil
 
+from alcove import storage
+
 
 @pytest.fixture(scope="session")
 def minio_container():
@@ -145,3 +147,36 @@ def setup_test_environment(tmp_path, minio_container):
 
     # Cleanup
     shutil.rmtree(test_dir)
+
+
+S3_VARS = ("S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_ENDPOINT_URL", "S3_BUCKET_NAME")
+
+
+@pytest.fixture
+def offline(tmp_path, monkeypatch):
+    """An empty project directory with no S3 credentials, and a home directory
+    of its own, so we can tell that nothing lands in the alcove cache."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for name in (*S3_VARS, "TEST_ENVIRONMENT", storage.LOCAL_STORE_ENV):
+        monkeypatch.delenv(name, raising=False)
+
+    # git must not read the developer's own config
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / ".gitconfig"))
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "test@example.com")
+
+    project = tmp_path / "project"
+    project.mkdir()
+    # an earlier test's fixture may have deleted the directory we're in, which
+    # monkeypatch.chdir needs to note down to return to
+    os.chdir(tmp_path)
+    monkeypatch.chdir(project)
+
+    yield project
+
+    # alcove never fell back to its S3 cache
+    assert not (home / ".cache" / "alcove").exists()

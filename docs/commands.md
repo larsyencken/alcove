@@ -13,6 +13,7 @@ Alcove provides the following commands:
 | `alcove audit` | Validate the alcove metadata |
 | `alcove new-table <path> [deps...] --lang <lang>` | Create a new derived table |
 | `alcove new-artifact <path> [deps...]` | Create a derived output that is not a table |
+| `alcove rename <old> <new>` | Rename a snapshot, table or artifact, and update what depends on it |
 | `alcove db [query]` | Open a DuckDB shell or execute a query |
 | `alcove export-duckdb <file>` | Export tables to a DuckDB file |
 
@@ -134,3 +135,25 @@ alcove run
 ```
 
 It downloads the snapshot files it needs before building anything, eight at a time; `--jobs` (`-j`) sets how many.
+
+## Renaming a dataset
+
+To rename a snapshot, table or artifact, give its old and new names, with their scheme and without a version:
+
+```bash
+alcove rename table://spend/daily table://spend/user_days
+```
+
+Every version of the dataset is renamed together (`latest`, dated versions and `*`). Alcove updates the places it manages:
+
+- the dataset's steps in `alcove.yaml`, and every dependency on them
+- for a table or artifact, the script or step folder that builds it, its `.meta.yaml` config, and anything else in the dataset's script folder, such as a helper module. If other datasets are nested inside it (e.g. `spend/daily/by_user`), only each version's own files move, and it warns about the rest
+- for a snapshot, its metadata files (which keep their checksums, so nothing is uploaded again), any data already fetched, and its `data/.gitignore` entries
+- template variables in the SQL steps that read it, e.g. `{daily}` becomes `{user_days}`. Renaming a dependency can rename another dependency's variable too, when the two names start or stop clashing; `alcove rename` prints each variable it changes. A SQL script shared by several steps (e.g. a wildcard's) is changed only if they all rename its variables the same way; otherwise it warns, and leaves it to you
+- the dataset's URIs, e.g. `table://spend/daily/latest`, in table and artifact scripts and configs, such as `inherit` keys and the header of a starter script
+
+Built tables and artifacts move to the new name, and are rebuilt on the next `alcove run`, along with everything downstream of them.
+
+It refuses, changing nothing, if the new name is already a dataset, or if files are already at the new name, such as a stray script or the metadata of a snapshot `alcove.yaml` doesn't name, which the renamed dataset would otherwise pick up as its own.
+
+Alcove leaves alone text it doesn't manage, such as a Python script that reads a table by its path, a snapshot script that names its dataset, or a query against an `alcove db` view. Afterwards it lists each line in the project's files that still mentions the old name, so you can check them. Use `--dry-run` to see what would change first, including those lines.

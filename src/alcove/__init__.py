@@ -23,6 +23,7 @@ from alcove.db import (
     _better_alias,
 )
 from alcove.exceptions import StepDefinitionError, StepScriptError
+from alcove.rename import rename_dataset
 from alcove.partitions import (
     ORPHANED_DIR,
     check_contiguous,
@@ -215,6 +216,23 @@ def main():
         help="Optional dependencies for the artifact",
     )
 
+    rename_parser = subparsers.add_parser(
+        "rename",
+        help="Rename every version of a snapshot, table or artifact, and "
+        "update what depends on it",
+    )
+    rename_parser.add_argument(
+        "old", type=str, help="The dataset to rename, e.g. table://spend/daily"
+    )
+    rename_parser.add_argument(
+        "new", type=str, help="Its new name, e.g. table://spend/user_days"
+    )
+    rename_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would change, without changing anything",
+    )
+
     db_parser = subparsers.add_parser(
         "db", help="Enter a DuckDB shell or execute a query"
     )
@@ -286,6 +304,12 @@ def main():
 
     elif args.command == "new-artifact":
         return alcove.new_artifact(args.artifact_path, args.dependencies)
+
+    elif args.command == "rename":
+        try:
+            return rename_dataset(alcove, args.old, args.new, dry_run=args.dry_run)
+        except (ValueError, FileNotFoundError) as e:
+            parser.exit(1, f"alcove: error: {e}\n")
 
     parser.print_help()
 
