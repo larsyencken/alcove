@@ -13,7 +13,7 @@ import duckdb
 import jsonschema
 import polars as pl
 
-from alcove.exceptions import ValidationError
+from alcove.exceptions import StepScriptError, ValidationError
 from alcove.partitions import PARTITION_GLOB, is_partition_version
 from alcove.paths import ARTIFACT_DIR, DATA_DIR, SNAPSHOT_DIR, TABLE_DIR
 from alcove.schemas import TABLE_SCHEMA
@@ -268,7 +268,7 @@ def run_python_step(command: list[Path]) -> None:
     command_s = [sys.executable, "-B"] + [str(p.resolve()) for p in command]
     env = dict(os.environ)
     env["PYTHONPYCACHEPREFIX"] = str(Path(tempfile.gettempdir()) / "alcove-pycache")
-    subprocess.run(command_s, check=True, env=env)
+    _run_step_script(command_s, env=env)
 
 
 def run_nu_step(command: list[Path]) -> None:
@@ -285,7 +285,17 @@ def run_nu_step(command: list[Path]) -> None:
             f"Running {command[0]} needs nushell, but `nu` is not on the PATH"
         )
 
-    subprocess.run([nu] + [str(p.resolve()) for p in command], check=True)
+    _run_step_script([nu] + [str(p.resolve()) for p in command])
+
+
+def _run_step_script(args: list[str], env: dict[str, str] | None = None) -> None:
+    "Run a step's script, raising StepScriptError if it fails."
+    # so the step's name is printed before any error from its script, even
+    # when stdout is piped and so block-buffered
+    sys.stdout.flush()
+    result = subprocess.run(args, env=env)
+    if result.returncode != 0:
+        raise StepScriptError(result.returncode, args)
 
 
 def run_script_step(command: list[Path]) -> None:
