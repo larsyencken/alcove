@@ -400,3 +400,35 @@ def test_init_explains_why_it_cannot_continue(offline):
         result.stderr
         == "alcove: error: git storage needs a git repo; run `git init` first\n"
     )
+
+
+def test_fetch_prunes_stray_files_in_subfolders(offline, tmp_path):
+    init_alcove(StorageConfig("local"))
+    folder = tmp_path / "folder"
+    (folder / "nested").mkdir(parents=True)
+    (folder / "nested" / "a.txt").write_text("a")
+    snapshot_to_alcove(folder, "example/nested/2024-07-26")
+
+    restored = Path("data/snapshots/example/nested/2024-07-26")
+    (restored / "nested" / "a.txt").write_text("changed")
+    (restored / "nested" / "stray.txt").write_text("stray")
+    (restored / "newdir" / "deeper").mkdir(parents=True)
+    (restored / "newdir" / "deeper" / "s.txt").write_text("stray")
+
+    plan_and_run(Alcove())
+    assert (restored / "nested" / "a.txt").read_text() == "a"
+    assert not (restored / "nested" / "stray.txt").exists()
+    assert not (restored / "newdir" / "deeper" / "s.txt").exists()
+
+
+def test_save_writes_a_changed_storage_setting(offline):
+    init_alcove()
+    alcove = Alcove()
+    alcove.storage = StorageConfig("local", path="blobs")
+    alcove.save()
+    assert config()["storage"] == {"backend": "local", "path": "blobs"}
+
+    alcove = Alcove()
+    alcove.storage = StorageConfig()
+    alcove.save()
+    assert config()["storage"] == "s3"
