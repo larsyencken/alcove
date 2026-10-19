@@ -11,70 +11,47 @@ Alcove provides the following commands:
 | `alcove run` | Build all tables and fetch outdated data |
 | `alcove list` | List all datasets, dependencies first, with consecutive days collapsed into one range (`--full` lists each one) |
 | `alcove audit` | Validate the alcove metadata |
-| `alcove new-table <path> [deps...]` | Create a new derived table |
+| `alcove new-table <path> [deps...] --lang <lang>` | Create a new derived table |
 | `alcove new-artifact <path> [deps...]` | Create a derived output that is not a table |
 | `alcove db [query]` | Open a DuckDB shell or execute a query |
 | `alcove export-duckdb <file>` | Export tables to a DuckDB file |
 
 ## Creating a new table
 
-To create a new table, use the `new-table` command:
+To create a new table, use the `new-table` command and pick the language of its script with `-l`/`--lang`:
 
 ```bash
-alcove new-table <table-path> [dep1 [dep2 [...]]]
+alcove new-table <table-path> [dep1 [dep2 [...]]] --lang python|sql|nushell
 ```
 
-This creates a placeholder executable script that generates an example data file based on the file extension (.parquet or .sql).
-
-### Creating a Parquet table
+This registers the table in `alcove.yaml` and writes a starter script to `src/steps/tables/<table-path>.py`, `.sql` or `.nu`. For a wildcard table such as `daily/*`, the script is `src/steps/tables/daily.py`, shared by every version. The script runs as written: with no dependencies it writes a small example table, and otherwise it copies its first dependency into the table. Its header comments say which variable holds each dependency's path. For example:
 
 ```bash
-alcove new-table path/to/your/table
+alcove new-table countries/latest snapshot://countries/latest --lang python
 ```
 
-This creates a placeholder Python script that generates an example Parquet file:
+writes:
 
 ```python
 #!/usr/bin/env python3
+#
+#  Builds table://countries/latest. Alcove calls this script with the path of each
+#  dependency, then the Parquet file to write:
+#
+#    deps[0]      snapshot://countries/latest
+#    output_file  the Parquet file to write
+#
 import sys
+
 import polars as pl
 
-data = {
-    "a": [1, 1, 3],
-    "b": [2, 3, 5],
-    "c": [3, 4, 6]
-}
+*deps, output_file = sys.argv[1:]
 
-df = pl.DataFrame(data)
-
-output_file = sys.argv[-1]
+df = pl.read_csv(deps[0])
 df.write_parquet(output_file)
 ```
 
-### Creating a SQL table
-
-```bash
-alcove new-table path/to/your/table.sql
-```
-
-This creates a placeholder SQL script:
-
-```sql
--- SQL script to create a table
-CREATE TABLE example_table AS
-SELECT
-    1 AS a,
-    2 AS b,
-    3 AS c
-```
-
-### Opening in your editor
-
-The command also supports the `--edit` option to open the metadata file in your editor:
-
-```bash
-alcove new-table path/to/your/table --edit
-```
+Python scripts read the dependency with polars, SQL scripts with DuckDB, and nushell scripts with nushell's polars plugin, which must be registered with `plugin add`. Templates copy tables and CSV, TSV, Parquet, JSON or NDJSON snapshots. For any other dependency, such as a directory snapshot, another file format or an artifact, the script writes the example table instead, with a comment saying to replace it.
 
 ## Creating an artifact
 
@@ -126,27 +103,26 @@ A table or artifact step can be a nushell script, `<path>.nu`, which alcove runs
 
 ```nu
 #!/usr/bin/env nu
+plugin use polars
+
 def main [...args: path] {
     let dest = $args | last
     let deps = $args | drop 1
 
-    let sql = $"COPY \(FROM read_json\('/dev/stdin'\)\) TO '($dest)' \(FORMAT parquet\)"
-    open ($deps | first)
-    | where value > 0
-    | to json
-    | ^duckdb -c $sql
+    polars open --eager $deps.0
+    | polars filter ((polars col value) > 0)
+    | polars save $dest
 }
 ```
 
-Plain nushell can read CSV and JSON snapshots but can neither read nor write Parquet, so a step that depends on a table, and every table step's output, goes through the `duckdb` CLI (as in the example) or the [polars plugin](https://www.nushell.sh/book/dataframes.html) (`polars open`, `polars save $dest`). Several versions of one dependency, such as a wildcard's partitions, arrive as a single glob pattern like `data/tables/foo/*.parquet`. Expand it with `glob $dep`, or hand it to `duckdb` or `polars open`, which expand it themselves: `open` on a pattern returns nothing rather than failing. Nushell reads neither `config.nu` nor `env.nu` when it runs a script, so commands defined only in your shell config aren't available to a step; plugins registered with `plugin add` are. As with Python packages, the version of nushell and its plugins isn't part of a step's checksum, so upgrading them doesn't rebuild anything.
+Plain nushell can read CSV and JSON snapshots, but it can neither read nor write Parquet. So a step that depends on a table, and every table step's output, goes through the [polars plugin](https://www.nushell.sh/book/dataframes.html), as in the example, or the `duckdb` CLI. Several versions of one dependency, such as a wildcard's partitions, arrive as a single glob pattern like `data/tables/foo/*.parquet`. `polars open --eager` can't read a pattern. Open it lazily and collect it (`polars open $dep | polars collect`), or expand it with `glob $dep`. Plain `open` on a pattern returns nothing rather than failing. Nushell reads neither `config.nu` nor `env.nu` when it runs a script, so commands defined only in your shell config aren't available to a step; plugins registered with `plugin add` are. As with Python packages, the version of nushell and its plugins isn't part of a step's checksum, so upgrading them doesn't rebuild anything.
 
 A `<path>.py` or `<path>.sql` script takes precedence over a `<path>.nu` beside it. Step folders need a `__main__.py` entrypoint, so a nushell step is always a single file: a module it loads with `use ./helpers.nu` isn't part of its checksum, and editing that module doesn't rebuild the step.
 
 ## Executing SQL step definitions
 
-If a `.sql` step definition is detected, it will be executed using DuckDB with an in-memory database. The SQL file can use `{variable}` to interpolate template variables. The following template variables are available:
+If a `.sql` step definition is detected, it will be executed using DuckDB with an in-memory database. The SQL file can use `{variable}` to interpolate template variables, one for each dependency:
 
-- `{output_file}`: The path to the output file.
 - `{dependency}`: The path of each dependency, simplified to a semantic name.
 
 ## Building your alcove
