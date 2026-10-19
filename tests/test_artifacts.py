@@ -8,7 +8,7 @@ from alcove.artifacts import artifact_path, build_artifact, is_completed
 from alcove.core import Alcove
 from alcove.db import _get_tables
 from alcove.paths import ARTIFACT_DIR, ARTIFACT_SCRIPT_DIR, TABLE_DIR, TABLE_SCRIPT_DIR
-from alcove.schemas import ALCOVE_SCHEMA
+from alcove.schemas import ALCOVE_SCHEMA, ARTIFACT_SCHEMA, SNAPSHOT_SCHEMA, TABLE_SCHEMA
 from alcove.table_metadata import _metadata_path
 from alcove.types import StepURI
 from alcove.utils import load_yaml
@@ -87,6 +87,35 @@ def test_alcove_schema_rejects_hyphenated_names():
     }
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(config, ALCOVE_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        "snapshot://secrets/h100-prime-002/2026-10-15-1900",
+        "table://raw-data/latest",
+        "artifact://raw-data/latest",
+    ],
+)
+def test_alcove_schema_rejects_hyphenated_step_names(step):
+    config = {"version": 1, "steps": {step: []}}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(config, ALCOVE_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "schema,uri",
+    [
+        (SNAPSHOT_SCHEMA, "snapshot://secrets/h100-prime-002/2026-10-15-1900"),
+        (TABLE_SCHEMA, "table://raw-data/latest"),
+        (ARTIFACT_SCHEMA, "artifact://raw-data/latest"),
+    ],
+)
+def test_metadata_schemas_reject_hyphenated_names(schema, uri):
+    assert not jsonschema.Draft7Validator(schema["properties"]["uri"]).is_valid(uri)
+    assert jsonschema.Draft7Validator(schema["properties"]["uri"]).is_valid(
+        uri.replace("-", "_").replace("2026_10_15_1900", "2026-10-15-1900")
+    )
 
 
 def test_build_artifact_without_deps(setup_test_environment):

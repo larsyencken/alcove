@@ -346,6 +346,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 ## Changelog
 
 - `dev`
+  - `alcove snapshot` rejects names that tables could not depend on (hyphens outside the final version segment, e.g. `secrets/h100-prime-002/2026-10-15-1900`) before uploading anything, suggesting the underscored name; previously it accepted them and `alcove new-table` later failed with a schema traceback. `new-table` and `new-artifact` give the same error for such dependencies, and now also refuse such names for the new step itself. `alcove.yaml` and step metadata files now reject such names when loaded, so a project that has them fails with a schema error until they are renamed
   - Snapshot data can be kept in a local directory (`alcove init --storage local`) or in the git repo itself under `refs/alcove/blobs` (`alcove init --storage git`), as well as in S3; the choice is saved as `storage` in `alcove.yaml`, and neither needs S3 credentials or uses `~/.cache/alcove`
   - Saving `alcove.yaml` keeps settings other than `steps`; previously it dropped them, including `data_dir`
   - A snapshot folder left without files by a failed download, even if it still has subfolders, is fetched again; previously the next `alcove run` failed with `No files found ... to checksum`

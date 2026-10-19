@@ -9,7 +9,7 @@
     },
     "uri": {
       "type": "string",
-      "pattern": "^table://[a-z0-9-_/]+$"
+      "pattern": "^table://([a-z0-9_]+/)*[a-z0-9_-]+$"
     },
     "checksum": {
       "type": "string",

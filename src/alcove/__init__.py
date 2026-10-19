@@ -30,6 +30,7 @@ from alcove.partitions import (
     partition_gitignore_entry,
     tidy_orphans,
 )
+from alcove.schemas import check_step_uri
 from alcove.snapshots import DEFAULT_FETCH_JOBS, Snapshot
 from alcove.storage import (
     BACKENDS,
@@ -338,6 +339,8 @@ def snapshot_to_alcove(
 
     # sanity check that it does not exist
     proposed_uri = StepURI("snapshot", dataset_name)
+    # check before uploading anything, so tables can depend on this snapshot
+    check_step_uri(str(proposed_uri))
     partitioned = alcove.is_partitioned(proposed_uri) and proposed_uri not in listed
 
     if proposed_uri in alcove.steps and not force:
