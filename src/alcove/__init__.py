@@ -308,7 +308,7 @@ def main():
     elif args.command == "rename":
         try:
             return rename_dataset(alcove, args.old, args.new, dry_run=args.dry_run)
-        except ValueError as e:
+        except (ValueError, FileNotFoundError) as e:
             parser.exit(1, f"alcove: error: {e}\n")
 
     parser.print_help()
