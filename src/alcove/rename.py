@@ -4,19 +4,22 @@
 keeps under the old name:
 
 - the dataset's steps and every dependency on them in alcove.yaml
-- the scripts that build a table or artifact, and their `.meta.yaml` configs
+- the scripts that build a table or artifact, with their `.meta.yaml`
+  configs and any other files in the dataset's script folder
 - snapshot metadata, and any fetched snapshot data and data/.gitignore entries
 - built tables and artifacts, which then rebuild on the next `alcove run`,
   since the inputs recorded in their metadata no longer exist
 - template variables in the SQL steps that read the dataset, e.g. `{foo}`
   becomes `{bar}`
-- `inherit` keys in table configs that name the dataset
+- the dataset's URIs, e.g. `table://foo/latest`, in table and artifact
+  scripts and configs, such as `inherit` keys
 
 Text it does not manage, such as a Python script that reads a table by its
 path or a snapshot script that names its dataset, is left as it is; the
 lines that still mention the old name are listed at the end.
 """
 
+import os
 import re
 import shutil
 import string
@@ -29,18 +32,20 @@ from alcove.partitions import ORPHANED_DIR, partition_gitignore_entry
 from alcove.paths import ARTIFACT_DIR, DATA_DIR, SNAPSHOT_DIR, TABLE_DIR
 from alcove.schemas import check_step_uri
 from alcove.snapshots import Snapshot
-from alcove.table_metadata import _get_executable, _script_dir
+from alcove.table_metadata import _get_executable, _is_step_debris, _script_dir
 from alcove.tables import (
     _argument_groups,
     _dependency_glob_path,
     _dependency_path,
     _simplify_dependency_names,
 )
-from alcove.types import Dag, StepURI
+from alcove.types import SCHEMES, Dag, StepURI
 from alcove.utils import add_pattern_to_data_gitignore, add_to_data_gitignore, print_op
 from alcove.wildcards import expand_wildcards
 
 DATA_DIRS = {"snapshot": SNAPSHOT_DIR, "table": TABLE_DIR, "artifact": ARTIFACT_DIR}
+SCRIPT_SUFFIXES = (".py", ".sql", ".nu", ".meta.yaml")
+SCRIPT_DIRS = [_script_dir(StepURI(s, "x")) for s in ("table", "artifact")]
 
 
 @dataclass
@@ -49,16 +54,30 @@ class RenamePlan:
     new: StepURI
     # (from, to), in the order they are made
     moves: list[tuple[Path, Path]] = field(default_factory=list)
-    # snapshot metadata files to give their new uri, at their new path
-    snapshot_metadata: list[tuple[Path, StepURI, StepURI]] = field(default_factory=list)
+    # snapshot metadata, at its new path, and the uri it changes from and to
+    snapshot_metadata: dict[Path, tuple[StepURI, StepURI]] = field(default_factory=dict)
     # SQL scripts, at their new path, and the template variables to rename
     sql_renames: dict[Path, dict[str, str]] = field(default_factory=dict)
-    # table configs, at their new path, whose `inherit` keys name the dataset
-    configs: list[Path] = field(default_factory=list)
+    # scripts and configs, at their new path, that name a version's URI
+    uri_files: set[Path] = field(default_factory=set)
     warnings: list[str] = field(default_factory=list)
+    # datasets nested inside the old name, e.g. `bar` for foo/bar/latest
+    nested: set[str] = field(default_factory=set)
     # for a snapshot: is it partitioned, and the extensions of its data
     partitioned: bool = False
     extensions: set[str | None] = field(default_factory=set)
+
+    def moved(self, path: Path) -> Path:
+        "Where a file will be once the rename is done."
+        for src, dest in self.moves:
+            if path == src or path.is_relative_to(src):
+                return dest / path.relative_to(src)
+        return path
+
+    @property
+    def rewritten(self) -> list[Path]:
+        "Files whose text changes, at their new path."
+        return sorted({*self.snapshot_metadata, *self.uri_files, *self.sql_renames})
 
 
 def rename_dataset(alcove: Alcove, old: str, new: str, dry_run: bool = False) -> None:
@@ -67,24 +86,18 @@ def rename_dataset(alcove: Alcove, old: str, new: str, dry_run: bool = False) ->
 
     for src, dest in plan.moves:
         print_op("MOVE", f"{src} -> {dest}")
-    for path, renames in plan.sql_renames.items():
-        changes = ", ".join(f"{{{a}}} -> {{{b}}}" for a, b in renames.items())
-        print_op("UPDATE", f"{path} ({changes})")
-    for path in plan.configs:
-        print_op("UPDATE", path)
-    print_op("UPDATE", alcove.config_file)
 
-    # what the rename itself would rewrite isn't left over
-    skip = {alcove.config_file}
     if dry_run:
-        skip |= {src for src, _ in plan.moves} | set(plan.configs)
+        for path in plan.rewritten:
+            print_op("UPDATE", _describe_update(plan, path))
+        print_op("UPDATE", alcove.config_file)
     else:
         _execute(alcove, plan)
 
     for warning in plan.warnings:
         print(f"WARNING: {warning}")
 
-    leftovers = _references_left(plan, skip)
+    leftovers = _references_left(plan, alcove.config_file, dry_run)
     if leftovers:
         print(
             f"\nThese lines still mention {plan.old.path}; alcove does not "
@@ -108,6 +121,7 @@ def plan_rename(alcove: Alcove, old: str, new: str) -> RenamePlan:
 
     plan = RenamePlan(old_uri, new_uri)
     rename = _renamer(old_uri, new_uri)
+    every_uri = {*alcove.steps, *(d for ds in alcove.steps.values() for d in ds)}
 
     steps = [s for s in alcove.steps if _in_dataset(s, old_uri)]
     if not steps:
@@ -120,36 +134,64 @@ def plan_rename(alcove: Alcove, old: str, new: str) -> RenamePlan:
             )
         raise ValueError(f"No dataset {old_uri} in this alcove")
 
-    taken = [
-        s
-        for s in [*alcove.steps, *(d for ds in alcove.steps.values() for d in ds)]
-        if _in_dataset(s, new_uri)
-    ]
+    taken = sorted(s for s in every_uri if _in_dataset(s, new_uri))
     if taken:
         raise ValueError(f"{new_uri} already exists in this alcove: {taken[0]}")
 
     for step in steps:
         check_step_uri(str(rename(step)))
 
-    # read before anything moves, since it loads snapshot metadata
-    plan.sql_renames = _plan_sql_renames(alcove, old_uri, new_uri, plan)
+    versions = {s.version for s in steps if not s.is_wildcard}
+    plan.nested = _nested(old_uri, every_uri)
+    if versions & plan.nested:
+        raise ValueError(
+            f"{old_uri} has versions named like datasets nested inside it "
+            f"({', '.join(sorted(versions & plan.nested))}), so their files "
+            "can't be told apart; rename it by hand"
+        )
+
+    try:
+        dag = _expanded_dag(alcove)
+    except ValueError as e:
+        raise ValueError(
+            f"Cannot work out what each step reads, to update SQL template "
+            f"variables: {e}"
+        )
 
     if old_uri.scheme == "snapshot":
-        _plan_snapshot_moves(alcove, steps, plan)
-    else:
-        _plan_script_moves(steps, plan)
-        # tables and artifacts built per partition of a wildcard are not
-        # steps in alcove.yaml, so find what was built from the files
-        _plan_built_moves(plan)
+        _plan_snapshot_metadata(alcove, steps, plan)
 
-    plan.configs = _plan_config_updates(alcove, plan)
+    data_root = DATA_DIRS[old_uri.scheme]
+    folder = data_root / old_uri.path
+    # tables and artifacts built per partition of a wildcard are not steps in
+    # alcove.yaml, so their versions are found from their metadata files
+    built = (
+        {p.name.removesuffix(".meta.yaml") for p in folder.glob("*.meta.yaml")}
+        if folder.is_dir()
+        else set()
+    )
+    _plan_folder_moves(data_root, versions | built, plan)
+    _check_free(data_root, _nested(new_uri, every_uri), plan)
+
+    if old_uri.scheme != "snapshot":
+        script_root = _script_dir(old_uri)
+        _plan_folder_moves(script_root, versions, plan)
+        _check_free(script_root, _nested(new_uri, every_uri), plan)
+        # a script shared by every version, e.g. foo.sql for table://foo/*
+        for suffix in SCRIPT_SUFFIXES:
+            shared = script_root / f"{old_uri.path}{suffix}"
+            if shared.exists():
+                plan.moves.append((shared, script_root / f"{new_uri.path}{suffix}"))
 
     # check every destination up front, so a rename never stops half done
-    sources = {src for src, _ in plan.moves}
     for src, dest in plan.moves:
-        if dest.exists() and dest not in sources:
+        if dest.exists() or dest.is_symlink():
             raise ValueError(f"Cannot move {src} to {dest}: it already exists")
+        if dest.is_relative_to(src):
+            raise ValueError(f"Cannot move {src} into itself, to {dest}")
 
+    plan.sql_renames = _plan_sql_renames(dag, plan)
+    plan.uri_files = _plan_uri_updates(plan)
     return plan
 
 
@@ -174,6 +216,18 @@ def _version(dataset: StepURI, version: str) -> StepURI:
     return StepURI(dataset.scheme, f"{dataset.path}/{version}")
 
 
+def _nested(dataset: StepURI, uris: set[StepURI]) -> set[str]:
+    "The folders inside a dataset's folder that hold other datasets."
+    prefix = f"{dataset.path}/"
+    return {
+        s.path.removeprefix(prefix).split("/")[0]
+        for s in uris
+        if s.scheme == dataset.scheme
+        and s.path.startswith(prefix)
+        and not _in_dataset(s, dataset)
+    }
+
+
 def _renamer(old: StepURI, new: StepURI):
     def rename(step: StepURI) -> StepURI:
         if _in_dataset(step, old):
@@ -183,17 +237,8 @@ def _renamer(old: StepURI, new: StepURI):
     return rename
 
 
-def _rename_path(path: Path, root: Path, old: str, new: str) -> Path:
-    "data/tables/foo/latest.parquet -> data/tables/bar/latest.parquet, for foo -> bar."
-    rel = str(path.relative_to(root))
-    assert rel == old or rel.startswith((f"{old}/", f"{old}.")), (path, old)
-    return root / f"{new}{rel[len(old) :]}"
-
-
-def _plan_snapshot_moves(alcove: Alcove, steps: list[StepURI], plan: RenamePlan):
-    old, new = plan.old.path, plan.new.path
+def _plan_snapshot_metadata(alcove: Alcove, steps: list[StepURI], plan: RenamePlan):
     plan.partitioned = _version(plan.old, "*") in alcove.steps
-
     for step in sorted(steps):
         if step.is_wildcard:
             continue
@@ -202,62 +247,66 @@ def _plan_snapshot_moves(alcove: Alcove, steps: list[StepURI], plan: RenamePlan)
         plan.extensions.add(
             snapshot.extension if snapshot.snapshot_type == "file" else None
         )
-        metadata = snapshot.metadata_path
-        new_metadata = _rename_path(metadata, SNAPSHOT_DIR, old, new)
-        plan.moves.append((metadata, new_metadata))
-        plan.snapshot_metadata.append(
-            (new_metadata, step, _version(plan.new, step.version))
-        )
-
-        if snapshot.path.exists():
-            plan.moves.append(
-                (snapshot.path, _rename_path(snapshot.path, SNAPSHOT_DIR, old, new))
-            )
-
-    orphaned = SNAPSHOT_DIR / old / ORPHANED_DIR
-    if plan.partitioned and orphaned.exists():
-        plan.moves.append((orphaned, SNAPSHOT_DIR / new / ORPHANED_DIR))
+        new_uri = _version(plan.new, step.version)
+        new_metadata = SNAPSHOT_DIR / f"{new_uri.path}.meta.yaml"
+        plan.snapshot_metadata[new_metadata] = (step, new_uri)
 
 
-def _plan_script_moves(steps: list[StepURI], plan: RenamePlan) -> None:
-    "The script (or step folder) that builds each version, and its config."
-    script_dir = _script_dir(plan.old)
-    seen = set()
-    for step in sorted(steps):
-        try:
-            script = _get_executable(step, check=False)
-        except FileNotFoundError:
-            plan.warnings.append(f"{step} has no script to move")
-            continue
+def _plan_folder_moves(root: Path, versions: set[str], plan: RenamePlan) -> None:
+    """Move what's in the dataset's folder under root to its new folder.
 
-        for path in [script, script.with_suffix(".meta.yaml")]:
-            if path in seen or not path.exists():
-                continue
-            seen.add(path)
-            plan.moves.append(
-                (path, _rename_path(path, script_dir, plan.old.path, plan.new.path))
-            )
-
-
-def _plan_built_moves(plan: RenamePlan) -> None:
-    "Every built version of a table or artifact, found by its metadata file."
-    root = DATA_DIRS[plan.old.scheme]
+    With no other dataset nested inside it, the folder is all the dataset's,
+    so everything in it moves, helper modules and set-aside data included.
+    Otherwise only each version's own files and folders move.
+    """
     folder = root / plan.old.path
     if not folder.is_dir():
         return
 
-    for metadata in sorted(folder.glob("*.meta.yaml")):
-        version = metadata.name.removesuffix(".meta.yaml")
-        if plan.old.scheme == "table":
-            outputs = [folder / f"{version}.parquet"]
-        else:
-            outputs = [folder / version]
-
-        for path in [*outputs, metadata]:
-            if path.exists():
-                plan.moves.append(
-                    (path, _rename_path(path, root, plan.old.path, plan.new.path))
+    for entry in sorted(folder.iterdir()):
+        if entry.name in plan.nested:
+            continue
+        own = entry.name.split(".")[0] in versions or entry.name == ORPHANED_DIR
+        if plan.nested and not own:
+            if not _is_step_debris(entry.name):
+                plan.warnings.append(
+                    f"{entry} was left where it is, since datasets nested in "
+                    f"{plan.old} share its folder; move it yourself if "
+                    f"{plan.new} needs it"
                 )
+            continue
+        plan.moves.append((entry, root / plan.new.path / entry.name))
+
+
+def _check_free(root: Path, nested_new: set[str], plan: RenamePlan) -> None:
+    """Refuse to move into a folder that already holds files, which the
+    renamed dataset would pick up as its own: a stray script, or metadata of
+    a snapshot that alcove.yaml doesn't name."""
+    folder = root / plan.new.path
+    sources = {src for src, _ in plan.moves}
+    clutter = []
+    if folder.is_dir():
+        clutter = [
+            p
+            for p in sorted(folder.iterdir())
+            if p.name not in nested_new
+            and p not in sources
+            and not _is_step_debris(p.name)
+        ]
+    if root in SCRIPT_DIRS:
+        clutter += [
+            p
+            for suffix in SCRIPT_SUFFIXES
+            if (p := root / f"{plan.new.path}{suffix}").exists()
+        ]
+    if clutter:
+        listed = ", ".join(map(str, clutter[:3]))
+        if len(clutter) > 3:
+            listed += f" and {len(clutter) - 3} more"
+        raise ValueError(
+            f"Cannot rename {plan.old} to {plan.new}: {listed} already "
+            "exists, and would be taken as part of it; move it away first"
+        )
 
 
 def _expanded_dag(alcove: Alcove) -> Dag:
@@ -280,39 +329,26 @@ def _argument_paths(deps: list[StepURI]) -> list[Path]:
     return paths
 
 
-def _plan_sql_renames(
-    alcove: Alcove, old: StepURI, new: StepURI, plan: RenamePlan
-) -> dict[Path, dict[str, str]]:
-    """The template variables each SQL step must rename, keyed by where its
+def _plan_sql_renames(dag: Dag, plan: RenamePlan) -> dict[Path, dict[str, str]]:
+    """The template variables each SQL script must rename, keyed by where the
     script will be.
 
     A dependency's variable is named after its path, so renaming the dataset
     renames it, and can rename another dependency's variable too, if the new
-    name clashes with it or the old one did.
+    name clashes with it or the old one did. A script shared by several steps
+    is only changed if they all rename its variables the same way.
     """
-    try:
-        dag = _expanded_dag(alcove)
-    except ValueError as e:
-        plan.warnings.append(
-            f"SQL template variables were not updated, since the steps could "
-            f"not be expanded: {e}"
-        )
-        return {}
-
-    root = DATA_DIRS[old.scheme]
-    old_dir = root / old.path
+    root = DATA_DIRS[plan.old.scheme]
+    old_dir = root / plan.old.path
 
     def renamed(path: Path) -> Path:
         if path.parent == old_dir:
-            return root / new.path / path.name
+            return root / plan.new.path / path.name
         return path
 
-    per_script: dict[Path, dict[str, str]] = {}
-    conflicts: set[Path] = set()
+    per_script: dict[Path, list[dict[str, str]]] = {}
     for step, deps in dag.items():
-        if step.scheme not in ("table", "artifact"):
-            continue
-        if not any(_in_dataset(d, old) for d in deps):
+        if step.scheme == "snapshot":
             continue
         try:
             script = _get_executable(step, check=False)
@@ -325,30 +361,28 @@ def _plan_sql_renames(
         after = [renamed(p) for p in before]
         before_names = {p: n for n, p in _simplify_dependency_names(before).items()}
         after_names = {p: n for n, p in _simplify_dependency_names(after).items()}
-        renames = {
-            before_names[b]: after_names[a]
-            for b, a in zip(before, after)
-            if before_names[b] != after_names[a]
-        }
-        if not renames:
-            continue
-
-        if _in_dataset(step, old):
-            script = _rename_path(script, _script_dir(old), old.path, new.path)
-
-        if script in per_script and per_script[script] != renames:
-            # a script shared by several versions whose dependencies differ
-            conflicts.add(script)
-        per_script.setdefault(script, {}).update(renames)
-
-    for script in conflicts:
-        plan.warnings.append(
-            f"{script} is shared by steps whose template variables rename "
-            "differently, so it was left as it is; update its variables yourself"
+        per_script.setdefault(script, []).append(
+            {
+                before_names[b]: after_names[a]
+                for b, a in zip(before, after)
+                if before_names[b] != after_names[a]
+            }
         )
-        del per_script[script]
 
-    return per_script
+    sql_renames = {}
+    for script, renames in per_script.items():
+        if not any(renames):
+            continue
+        if any(r != renames[0] for r in renames):
+            plan.warnings.append(
+                f"{script} is shared by steps whose template variables would "
+                "rename differently, or not at all, so it was left as it is; "
+                "update its variables yourself"
+            )
+            continue
+        sql_renames[plan.moved(script)] = renames[0]
+
+    return sql_renames
 
 
 def rename_template_variables(sql: str, renames: dict[str, str]) -> str:
@@ -379,20 +413,21 @@ def rename_template_variables(sql: str, renames: dict[str, str]) -> str:
     return rebuild(renames)
 
 
-def _plan_config_updates(alcove: Alcove, plan: RenamePlan) -> list[Path]:
-    "Table configs whose `inherit` keys name a version of the dataset."
-    moved = dict(plan.moves)
-    configs = set()
-    for step in alcove.steps:
-        if step.scheme == "snapshot":
-            continue
-        try:
-            config = _get_executable(step, check=False).with_suffix(".meta.yaml")
-        except FileNotFoundError:
-            continue
-        if config.exists() and _uri_pattern(plan.old).search(config.read_text()):
-            configs.add(moved.get(config, config))
-    return sorted(configs)
+def _plan_uri_updates(plan: RenamePlan) -> set[Path]:
+    """Table and artifact scripts and configs naming a version of the dataset
+    by its URI, e.g. an `inherit` key, or the header of a starter script."""
+    pattern = _uri_pattern(plan.old)
+    found = set()
+    for script_dir in SCRIPT_DIRS:
+        for path in script_dir.rglob("*") if script_dir.is_dir() else []:
+            if not path.is_file() or not path.name.endswith(SCRIPT_SUFFIXES):
+                continue
+            try:
+                if pattern.search(path.read_text()):
+                    found.add(plan.moved(path))
+            except (UnicodeDecodeError, OSError):
+                continue
+    return found
 
 
 def _uri_pattern(dataset: StepURI) -> re.Pattern:
@@ -403,30 +438,49 @@ def _uri_pattern(dataset: StepURI) -> re.Pattern:
     )
 
 
+def _rewrite(plan: RenamePlan, path: Path, text: str) -> str:
+    "The text of a file, at its new path, as the rename leaves it."
+    if path in plan.snapshot_metadata:
+        old_uri, new_uri = plan.snapshot_metadata[path]
+        text = text.replace(str(old_uri), str(new_uri))
+
+    if path in plan.uri_files:
+        replacement = f"{plan.new.scheme}://{plan.new.path}/\\g<version>"
+        text = _uri_pattern(plan.old).sub(replacement, text)
+
+    if path in plan.sql_renames:
+        text = rename_template_variables(text, plan.sql_renames[path])
+
+    return text
+
+
+def _describe_update(plan: RenamePlan, path: Path) -> str:
+    if path not in plan.sql_renames:
+        return str(path)
+    changes = ", ".join(
+        f"{{{a}}} -> {{{b}}}" for a, b in plan.sql_renames[path].items()
+    )
+    return f"{path} ({changes})"
+
+
 def _execute(alcove: Alcove, plan: RenamePlan) -> None:
     for src, dest in plan.moves:
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dest)
         _remove_empty_parents(src.parent)
 
-    pattern = _uri_pattern(plan.old)
-    replacement = f"{plan.new.scheme}://{plan.new.path}/\\g<version>"
-
-    for metadata, old_uri, new_uri in plan.snapshot_metadata:
-        text = metadata.read_text()
-        metadata.write_text(text.replace(str(old_uri), str(new_uri)))
-
-    for config in plan.configs:
-        config.write_text(pattern.sub(replacement, config.read_text()))
-
-    for script, renames in plan.sql_renames.items():
+    for path in plan.rewritten:
         try:
-            script.write_text(rename_template_variables(script.read_text(), renames))
+            path.write_text(_rewrite(plan, path, path.read_text()))
         except ValueError:
-            changes = ", ".join(f"{{{a}}} to {{{b}}}" for a, b in renames.items())
-            plan.warnings.append(
-                f"Could not update {script}; change {changes} in it yourself"
+            changes = ", ".join(
+                f"{{{a}}} to {{{b}}}" for a, b in plan.sql_renames[path].items()
             )
+            plan.warnings.append(
+                f"Could not update {path}; change {changes} in it yourself"
+            )
+            continue
+        print_op("UPDATE", _describe_update(plan, path))
 
     if plan.old.scheme == "snapshot":
         _update_data_gitignore(plan)
@@ -444,8 +498,7 @@ def _execute(alcove: Alcove, plan: RenamePlan) -> None:
 
 def _remove_empty_parents(folder: Path) -> None:
     "Tidy away folders a move left empty, up to the top of their tree."
-    stop = {Path("."), DATA_DIR, SNAPSHOT_DIR, TABLE_DIR, ARTIFACT_DIR}
-    stop |= {_script_dir(StepURI(s, "x")) for s in ("table", "artifact")}
+    stop = {Path("."), DATA_DIR, *DATA_DIRS.values(), *SCRIPT_DIRS}
     while folder not in stop and folder.is_dir() and not any(folder.iterdir()):
         folder.rmdir()
         folder = folder.parent
@@ -476,32 +529,47 @@ def _update_data_gitignore(plan: RenamePlan) -> None:
                 partition_gitignore_entry(plan.new.path, extension)
             )
     else:
-        for _, _, new_uri in plan.snapshot_metadata:
+        for _, new_uri in plan.snapshot_metadata.values():
             add_to_data_gitignore(Snapshot.load(new_uri.path).path)
 
 
-def _references_left(plan: RenamePlan, skip: set[Path]) -> list[str]:
+def _references_left(plan: RenamePlan, config_file: Path, dry_run: bool) -> list[str]:
     """Lines in the project's own files that still mention the dataset by
-    path, URI or DuckDB view name, as `path:line: text`."""
+    path, URI or DuckDB view name, as `path:line: text`. For a dry run, they
+    are the lines the rename would leave."""
     old = plan.old.path
-    patterns = [rf"(?<![\w-]){re.escape(old)}(?![\w-])"]
+    # not the same name under another scheme, e.g. snapshot://foo for
+    # table://foo, nor a dataset nested inside it, nor a template variable
+    others = [s for s in SCHEMES if s != plan.old.scheme]
+    not_after = "".join(rf"(?<!{s}://)(?<!{s}s/)" for s in others)
+    not_nested = (
+        rf"(?!/(?:{'|'.join(map(re.escape, sorted(plan.nested)))})(?![\w-]))"
+        if plan.nested
+        else ""
+    )
+    patterns = [rf"(?<![\w{{-]){not_after}{re.escape(old)}(?![\w}}-]){not_nested}"]
     if plan.old.scheme == "table":
         # views in `alcove db`, e.g. foo_bar_latest
         patterns.append(rf"\b{re.escape(old.replace('/', '_'))}_")
     regex = re.compile("|".join(patterns))
 
+    skip = {config_file, DATA_DIR / ".gitignore"}
     found = []
-    for path in _project_files():
+    for source in _project_files():
+        path = plan.moved(source) if dry_run else source
         if path in skip or path.is_relative_to(TABLE_DIR):
             continue
         if path.is_relative_to(ARTIFACT_DIR):
             continue
         try:
-            text = path.read_text()
-        except (UnicodeDecodeError, OSError):
+            text = source.read_text()
+            if dry_run:
+                text = _rewrite(plan, path, text)
+        except (UnicodeDecodeError, ValueError, OSError):
             continue
         for i, line in enumerate(text.splitlines(), 1):
-            if regex.search(line):
+            # the new name may contain the old one, e.g. foo -> archive/foo
+            if regex.search(line.replace(plan.new.path, "")):
                 found.append(f"{path}:{i}: {line.strip()}")
     return found
 
@@ -510,15 +578,22 @@ def _project_files() -> list[Path]:
     "The files git tracks or would track, else everything outside data/."
     try:
         result = subprocess.run(
-            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
             capture_output=True,
             text=True,
             check=True,
         )
-        return [Path(p) for p in result.stdout.splitlines() if Path(p).is_file()]
+        paths = [Path(p) for p in result.stdout.split("\0") if p]
+        return [p for p in paths if p.is_file()]
     except (FileNotFoundError, subprocess.CalledProcessError):
-        return [
-            p
-            for p in Path(".").rglob("*")
-            if p.is_file() and not p.parts[0].startswith(".") and p.parts[0] != "data"
-        ]
+        files = []
+        for folder, dirs, names in os.walk("."):
+            dirs[:] = [
+                d
+                for d in dirs
+                if not d.startswith(".")
+                and d not in ("data", "node_modules")
+                and d != "__pycache__"
+            ]
+            files += [Path(folder, n) for n in names]
+        return [Path(os.path.normpath(p)) for p in files]

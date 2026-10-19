@@ -1,5 +1,6 @@
 """`alcove rename` renames every version of a dataset, and what refers to it."""
 
+import subprocess
 from pathlib import Path
 
 import polars as pl
@@ -233,3 +234,117 @@ def alcove_uri(uri: str):
     from alcove.types import StepURI
 
     return StepURI.parse(uri)
+
+
+def test_shared_script_left_alone_if_another_step_needs_its_variables(
+    offline, tmp_path, capsys
+):
+    "Only report/a reads geo/countries, but report.sql builds report/b too."
+    init_alcove(StorageConfig("local"))
+    add_countries(tmp_path)
+    alcove = Alcove()
+    for name in ["geo/countries", "other/countries"]:
+        alcove.new_table(f"{name}/latest", ["snapshot://countries/latest"])
+        write_sql(f"{name}/latest.sql", "SELECT * FROM '{countries}'\n")
+    alcove.new_table("report/a", ["table://geo/countries/latest"])
+    alcove.new_table("report/b", ["table://other/countries/latest"])
+    write_sql("report.sql", "SELECT * FROM '{countries}'\n")
+
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+
+    assert Path("src/steps/tables/report.sql").read_text() == (
+        "SELECT * FROM '{countries}'\n"
+    )
+    assert "report.sql is shared by steps" in capsys.readouterr().out
+
+
+def test_rename_refuses_to_move_into_its_own_version(offline, tmp_path):
+    init_alcove(StorageConfig("local"))
+    folder = tmp_path / "d1"
+    folder.mkdir()
+    (folder / "a.txt").write_text("a")
+    snapshot_to_alcove(folder, "dirs/latest")
+    before = sorted(Path(".").rglob("*"))
+
+    with pytest.raises(ValueError, match="already exists|into itself"):
+        rename_dataset(Alcove(), "snapshot://dirs", "snapshot://dirs/latest")
+    assert sorted(Path(".").rglob("*")) == before
+
+
+def test_rename_refuses_a_stray_script_at_the_new_name(project):
+    write_sql("geo/nations/latest.sql", "SELECT 1 AS dim_stale\n")
+    with pytest.raises(ValueError, match="geo/nations/latest.sql already exists"):
+        rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+    assert Path("src/steps/tables/geo/countries/latest.sql").exists()
+
+
+def test_rename_refuses_undeclared_snapshot_metadata_at_the_new_name(project, tmp_path):
+    stray = Path("data/snapshots/places/2024-01-05.meta.yaml")
+    stray.parent.mkdir(parents=True)
+    stray.write_text("uri: snapshot://places/2024-01-05\n")
+    with pytest.raises(ValueError, match="already exists"):
+        rename_dataset(Alcove(), "snapshot://countries", "snapshot://places")
+
+
+def test_rename_moves_helpers_in_the_script_folder(project):
+    helper = Path("src/steps/tables/geo/countries/common.py")
+    helper.write_text("X = 1\n")
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+    assert Path("src/steps/tables/geo/nations/common.py").read_text() == "X = 1\n"
+    assert not helper.parent.exists()
+
+
+def test_rename_leaves_helpers_shared_with_nested_datasets(project, capsys):
+    alcove = Alcove()
+    alcove.new_table("geo/countries/big/latest", ["table://geo/countries/latest"])
+    write_sql("geo/countries/big/latest.sql", "SELECT * FROM '{countries}'\n")
+    helper = Path("src/steps/tables/geo/countries/common.py")
+    helper.write_text("X = 1\n")
+
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+
+    assert helper.exists()
+    assert Path("src/steps/tables/geo/countries/big/latest.sql").exists()
+    assert Path("src/steps/tables/geo/nations/latest.sql").exists()
+    out = capsys.readouterr().out
+    assert "common.py was left where it is" in out
+    # the nested dataset isn't reported as a leftover
+    assert "geo/countries/big" not in out.split("still mention")[-1]
+
+
+def test_rename_rewrites_uris_in_step_scripts(project):
+    script = Path("src/steps/tables/summary/latest.sql")
+    script.write_text("-- reads table://geo/countries/latest\n" + SUMMARY_SQL)
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+    assert script.read_text().startswith("-- reads table://geo/nations/latest\n")
+
+
+def test_leftovers_ignore_other_schemes_and_the_new_name(project, capsys):
+    "Renaming the snapshot doesn't report the table of the same name."
+    Path("notes.md").write_text(
+        "see data/tables/countries and table://countries/latest\n"
+        "see data/snapshots/countries/2024-01-01.csv\n"
+    )
+    rename_dataset(Alcove(), "snapshot://countries", "snapshot://places/countries")
+    leftovers = capsys.readouterr().out.split("still mention")[-1]
+    assert "notes.md:2:" in leftovers
+    assert "notes.md:1:" not in leftovers
+    assert "places/countries" not in leftovers.replace("notes.md", "")
+
+
+@pytest.mark.parametrize("in_git", [True, False])
+def test_dry_run_reports_the_same_leftovers(project, capsys, in_git):
+    "Files are found with git ls-files, or by walking the project without git."
+    if in_git:
+        subprocess.run(["git", "init", "-q"], check=True)
+    Path("notes café.md").write_text("geo/countries\n")
+
+    def leftovers(dry_run: bool) -> str:
+        rename_dataset(
+            Alcove(), "table://geo/countries", "table://geo/nations", dry_run
+        )
+        return capsys.readouterr().out.split("still mention")[-1]
+
+    dry = leftovers(True)
+    assert "notes café.md:1:" in dry
+    assert dry == leftovers(False)
