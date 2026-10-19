@@ -6,6 +6,7 @@ import jsonschema
 
 from alcove.partitions import discover_partitions
 from alcove.schemas import ALCOVE_SCHEMA
+from alcove.storage import StorageConfig
 from alcove.types import Dag, StepURI
 from alcove.utils import load_yaml, save_yaml
 
@@ -20,6 +21,9 @@ class Alcove:
     # partitions of wildcard snapshot datasets, found on disk rather than
     # declared in alcove.yaml; never written back to it
     discovered: set[StepURI] = field(default_factory=set)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    # keys of alcove.yaml besides the steps, kept as they are when saving
+    settings: dict = field(default_factory=dict)
 
     def __init__(self, config_file: Path = DEFAULT_ALCOVE_PATH):
         "Load an existing alcove.yaml file from disk."
@@ -34,6 +38,8 @@ class Alcove:
         jsonschema.validate(config, ALCOVE_SCHEMA)
 
         self.version = config["version"]
+        self.storage = StorageConfig.parse(config.get("storage"))
+        self.settings = {k: v for k, v in config.items() if k != "steps"}
         self.steps = {
             StepURI.parse(s): [StepURI.parse(d) for d in deps]
             for s, deps in config["steps"].items()
@@ -51,23 +57,31 @@ class Alcove:
                         self.discovered.add(partition)
 
     @staticmethod
-    def init(alcove_file: Path = DEFAULT_ALCOVE_PATH) -> "Alcove":
+    def init(
+        alcove_file: Path = DEFAULT_ALCOVE_PATH,
+        storage: StorageConfig | None = None,
+    ) -> "Alcove":
         if not alcove_file.exists():
-            save_yaml(
-                {
-                    "version": 1,
-                    "data_dir": "data",
-                    "steps": {},
-                },
-                alcove_file,
-            )
+            config: dict = {"version": 1, "data_dir": "data"}
+            if storage is not None:
+                config["storage"] = storage.to_yaml()
+            config["steps"] = {}
+            save_yaml(config, alcove_file)
         else:
             print(f"{alcove_file} already exists")
+            if storage is not None:
+                existing = StorageConfig.load(alcove_file)
+                if existing != storage:
+                    raise ValueError(
+                        f"{alcove_file} already keeps its data in "
+                        f"{existing.backend} storage, not {storage.backend}"
+                    )
 
         return Alcove()
 
     def save(self) -> None:
         config = {
+            **self.settings,
             "version": self.version,
             "steps": {
                 str(k): [str(v) for v in vs]

@@ -31,6 +31,7 @@ from alcove.partitions import (
     tidy_orphans,
 )
 from alcove.snapshots import DEFAULT_FETCH_JOBS, Snapshot
+from alcove.storage import BACKENDS, DEFAULT_LOCAL_STORE, GitStore, StorageConfig
 from alcove.types import StepURI
 from alcove.utils import DATA_IGNORES, checksum_manifest, console
 
@@ -124,8 +125,18 @@ def main():
         help="List in alphabetical order rather than dependency order",
     )
 
-    subparsers.add_parser(
+    init_parser = subparsers.add_parser(
         "init", help="Initialize the alcove with the necessary directories"
+    )
+    init_parser.add_argument(
+        "--storage",
+        choices=BACKENDS,
+        help="Where to keep snapshot data: an S3-compatible bucket (the default), "
+        "a local directory, or this git repo, under refs/alcove/blobs",
+    )
+    init_parser.add_argument(
+        "--path",
+        help=f"For local storage, the directory to keep data in (default: {DEFAULT_LOCAL_STORE})",
     )
 
     audit_parser = subparsers.add_parser(
@@ -198,7 +209,12 @@ def main():
     args = parser.parse_args()
 
     if args.command == "init":
-        return init_alcove()
+        if args.path and args.storage != "local":
+            parser.error("--path only applies to --storage local")
+        storage = None
+        if args.storage:
+            storage = StorageConfig(backend=args.storage, path=args.path)
+        return init_alcove(storage)
 
     alcove = Alcove()
 
@@ -236,12 +252,18 @@ def main():
     parser.print_help()
 
 
-def init_alcove_config() -> None:
+def init_alcove_config(storage: StorageConfig | None = None) -> None:
     """
     Initialize the alcove configuration file (alcove.yaml).
     """
     print("Initializing alcove")
-    Alcove.init()
+    if storage is not None and storage.backend == "git":
+        GitStore().check()
+    Alcove.init(storage=storage)
+    if storage is not None and storage.backend == "local" and storage.path is None:
+        from alcove.utils import add_entry_to_file
+
+        add_entry_to_file(Path(".gitignore"), f"/{DEFAULT_LOCAL_STORE.parts[0]}/")
 
 
 def init_data_files() -> None:
@@ -253,13 +275,13 @@ def init_data_files() -> None:
     ensure_data_gitignore()
 
 
-def init_alcove() -> None:
+def init_alcove(storage: StorageConfig | None = None) -> None:
     """
     Initialize alcove with the necessary files and directories.
     Creates the alcove.yaml file and data/.gitignore for ignoring data files.
     """
     # Initialize configuration
-    init_alcove_config()
+    init_alcove_config(storage)
 
     # Initialize data files setup
     init_data_files()
@@ -268,9 +290,9 @@ def init_alcove() -> None:
 def snapshot_to_alcove(
     file_path: Path, dataset_name: str, edit: bool = False, force: bool = False
 ) -> Snapshot:
-    _check_s3_credentials()
-
     alcove = Alcove()
+    if alcove.storage.backend == "s3":
+        _check_s3_credentials()
 
     # a partition must be named by its date before any default version is
     # appended, or `foo/2026-1-5` would become a new dataset `foo/2026-1-5/<today>`

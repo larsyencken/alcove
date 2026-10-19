@@ -20,7 +20,14 @@ from botocore.config import Config
 
 from alcove.paths import BASE_DIR, SNAPSHOT_DIR
 from alcove.schemas import SNAPSHOT_SCHEMA, validate_snapshot
-from alcove.types import Checksum, DatasetName, FileName, Manifest, StepURI
+from alcove.storage import (
+    BlobStore,
+    GitStore,
+    LocalStore,
+    StorageConfig,
+    local_store_root,
+)
+from alcove.types import Checksum, DatasetName, Manifest, StepURI
 from alcove.utils import (
     checksum_file,
     checksum_folder,
@@ -110,8 +117,8 @@ class Snapshot:
         if not in_place:
             copy_dir(local_path, data_path)
 
-        # upload to s3
-        manifest = add_directory_to_s3(data_path)
+        manifest = checksum_folder(data_path)
+        get_store().put([(data_path / name, c) for name, c in manifest.items()])
         checksum = checksum_manifest(manifest)
 
         # Create metadata record
@@ -168,8 +175,8 @@ class Snapshot:
             # if you edit a snapshot in place, the paths may be the same
             copy_file(local_path, data_path)
 
-        # it tells us the s3 path to store it at
-        add_to_s3(data_path, checksum)
+        # it tells us where in the store to keep it
+        get_store().put([(data_path, checksum)])
 
         # then save the metadata record
         snapshot = Snapshot(
@@ -188,9 +195,10 @@ class Snapshot:
             return self.path.exists() and self.checksum == checksum_file(self.path)
 
         elif self.snapshot_type == "directory":
-            return self.path.is_dir() and self.checksum == checksum_manifest(
-                checksum_folder(self.path)
-            )
+            # a fetch that failed can leave the directory empty
+            if not self.path.is_dir() or not any(self.path.iterdir()):
+                return False
+            return self.checksum == checksum_manifest(checksum_folder(self.path))
 
         raise ValueError(f"Unknown snapshot type: {self.snapshot_type}")
 
@@ -240,12 +248,13 @@ def fetch_snapshots(snapshots: list[Snapshot], jobs: int = 1) -> None:
             destinations.setdefault(checksum, []).append(dest_path)
 
     session = FetchSession(max_pool_connections=jobs)
+    store = get_store(session)
 
     def fetch(checksum: Checksum, dest_paths: list[Path]) -> None:
-        # the first fetch fills the cache, so the rest are copies from it
+        # for S3, the first fetch fills the cache, so the rest are copies from it
         for dest_path in dest_paths:
             session.check_stopped()
-            fetch_from_s3(checksum, dest_path, session)
+            store.get(checksum, dest_path)
 
     pool = ThreadPoolExecutor(max_workers=jobs)
     try:
@@ -294,12 +303,30 @@ class FetchSession:
             raise FetchStopped()
 
 
-def add_directory_to_s3(file_path: Path) -> dict[FileName, Checksum]:
-    checksums = checksum_folder(file_path)
-    for file_name, checksum in checksums.items():
-        add_to_s3(file_path / file_name, checksum)
+class S3Store:
+    "Blobs in an S3-compatible bucket, with a local cache in ~/.cache/alcove."
 
-    return checksums
+    def __init__(self, session: Optional[FetchSession] = None) -> None:
+        self.session = session
+
+    def put(self, files: list[tuple[Path, Checksum]]) -> None:
+        for file_path, checksum in files:
+            add_to_s3(file_path, checksum)
+
+    def get(self, checksum: Checksum, dest_path: Path) -> None:
+        fetch_from_s3(checksum, dest_path, self.session)
+
+
+def get_store(
+    session: Optional[FetchSession] = None, config_file: Path = BASE_DIR / "alcove.yaml"
+) -> BlobStore:
+    "The store alcove.yaml says this alcove keeps its snapshot data in."
+    config = StorageConfig.load(config_file)
+    if config.backend == "local":
+        return LocalStore(local_store_root(config, config_file.parent))
+    if config.backend == "git":
+        return GitStore(config_file.parent)
+    return S3Store(session)
 
 
 def add_to_s3(file_path: Union[str, Path], checksum: Checksum) -> None:

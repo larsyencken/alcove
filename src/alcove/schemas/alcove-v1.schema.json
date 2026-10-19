@@ -29,6 +29,28 @@
       "description": "Directory where the alcove data is stored, relative to this file.",
       "default": "data"
     },
+    "storage": {
+      "description": "Where snapshot data is kept. Defaults to s3.",
+      "oneOf": [
+        {
+          "enum": ["s3", "local", "git"]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "backend": {
+              "enum": ["s3", "local", "git"]
+            },
+            "path": {
+              "type": "string",
+              "description": "For local storage, the directory blobs are kept in, relative to this file."
+            }
+          },
+          "required": ["backend"],
+          "additionalProperties": false
+        }
+      ]
+    },
     "steps": {
       "type": "object",
       "description": "List of available steps to run",
