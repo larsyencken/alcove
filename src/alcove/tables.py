@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -110,7 +111,7 @@ def _execute_table_build(
         if command[0].suffix == ".sql":
             _exec_sql_command(uri, command)
         else:
-            _exec_python_command(uri, command)
+            _exec_script_command(uri, command)
 
         if not dest_path.exists():
             raise Exception(
@@ -264,11 +265,36 @@ def run_python_step(command: list[Path]) -> None:
     subprocess.run(command_s, check=True, env=env)
 
 
-def _exec_python_command(uri: StepURI, command: list[Path]) -> None:
+def run_nu_step(command: list[Path]) -> None:
+    """Run a step's nushell script.
+
+    Nushell reads neither config.nu nor env.nu when it runs a script, so a
+    step can't come to depend on commands defined only in someone's shell
+    config. Plugins registered with `plugin add`, such as polars, are still
+    available.
+    """
+    nu = shutil.which("nu")
+    if nu is None:
+        raise FileNotFoundError(
+            f"Running {command[0]} needs nushell, but `nu` is not on the PATH"
+        )
+
+    subprocess.run([nu] + [str(p.resolve()) for p in command], check=True)
+
+
+def run_script_step(command: list[Path]) -> None:
+    "Run a step's build script with nushell if it is a `.nu` file, else Python."
+    if command[0].suffix == ".nu":
+        run_nu_step(command)
+    else:
+        run_python_step(command)
+
+
+def _exec_script_command(uri: StepURI, command: list[Path]) -> None:
     output_file = command[-1]
     is_update = output_file.exists()
 
-    run_python_step(command)
+    run_script_step(command)
 
     if is_update:
         print_op("UPDATE", output_file)

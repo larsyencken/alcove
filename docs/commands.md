@@ -104,7 +104,7 @@ daily = pl.read_parquet(deps[0])
 (Path(out_dir) / "index.html").write_text(f"<h1>{len(daily)} days</h1>")
 ```
 
-The output lands in `data/artifacts/<artifact-path>/`, with a `.meta.yaml` sidecar recording a checksum of every file produced and of every input. Artifacts rebuild when any dependency or the script changes, can depend on snapshots, tables and other artifacts, and can be depended on by tables in turn. Artifact scripts must be Python; they do not appear in `alcove db`.
+The output lands in `data/artifacts/<artifact-path>/`, with a `.meta.yaml` sidecar recording a checksum of every file produced and of every input. Artifacts rebuild when any dependency or the script changes, can depend on snapshots, tables and other artifacts, and can be depended on by tables in turn. Artifact scripts must be Python or [nushell](#nushell-steps); they do not appear in `alcove db`.
 
 ## Steps as folders
 
@@ -116,9 +116,31 @@ src/steps/artifacts/reports/health/latest/
 └── template.html    # read relative to __file__
 ```
 
-A single `<path>.py` or `<path>.sql` file takes precedence over a folder at the same path, and the folder takes precedence over a version-shared `<parent>.py`. The optional metadata config for a folder step sits beside it as `<path>.meta.yaml`, exactly as for a single-file step.
+A single `<path>.py`, `<path>.sql` or `<path>.nu` file takes precedence over a folder at the same path, and the folder takes precedence over a version-shared `<parent>.py`, `<parent>.sql` or `<parent>.nu`. The optional metadata config for a folder step sits beside it as `<path>.meta.yaml`, exactly as for a single-file step.
 
 What counts as part of the folder: every regular file, following symlinked directories, so a template shared between steps through a symlink is still an input. Dangling symlinks are an error. Ignored: `__pycache__`, anything starting with a dot (editor swap files, `.ruff_cache`, `.DS_Store`), and editor backups ending in `~` or wrapped in `#`. Step scripts run with bytecode caching disabled and redirected, so a `__pycache__` left inside the folder by running the script by hand is neither read nor written.
+
+## Nushell steps
+
+A table or artifact step can be a nushell script, `<path>.nu`, which alcove runs with the `nu` on your `PATH`. Its arguments are the same as a Python step's: the path of each dependency, then the output path. Take them as one rest parameter and split off the last. Nushell doesn't stop you declaring a positional parameter after a rest parameter, but `def main [...deps: path, dest: path]` silently puts the first argument in `$dest`.
+
+```nu
+#!/usr/bin/env nu
+def main [...args: path] {
+    let dest = $args | last
+    let deps = $args | drop 1
+
+    let sql = $"COPY \(FROM read_json\('/dev/stdin'\)\) TO '($dest)' \(FORMAT parquet\)"
+    open ($deps | first)
+    | where value > 0
+    | to json
+    | ^duckdb -c $sql
+}
+```
+
+Plain nushell can read CSV and JSON snapshots but can neither read nor write Parquet, so a step that depends on a table, and every table step's output, goes through the `duckdb` CLI (as in the example) or the [polars plugin](https://www.nushell.sh/book/dataframes.html) (`polars open`, `polars save $dest`). Several versions of one dependency, such as a wildcard's partitions, arrive as a single glob pattern like `data/tables/foo/*.parquet`. Expand it with `glob $dep`, or hand it to `duckdb` or `polars open`, which expand it themselves: `open` on a pattern returns nothing rather than failing. Nushell reads neither `config.nu` nor `env.nu` when it runs a script, so commands defined only in your shell config aren't available to a step; plugins registered with `plugin add` are. As with Python packages, the version of nushell and its plugins isn't part of a step's checksum, so upgrading them doesn't rebuild anything.
+
+A `<path>.py` or `<path>.sql` script takes precedence over a `<path>.nu` beside it. Step folders need a `__main__.py` entrypoint, so a nushell step is always a single file: a module it loads with `use ./helpers.nu` isn't part of its checksum, and editing that module doesn't rebuild the step.
 
 ## Executing SQL step definitions
 

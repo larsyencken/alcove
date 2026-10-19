@@ -35,6 +35,11 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
+      - name: Install nushell
+        uses: hustcer/setup-nu@v3
+        with:
+          version: "0.116.1"
+
       - name: Install dependencies
         run: uv sync
 
