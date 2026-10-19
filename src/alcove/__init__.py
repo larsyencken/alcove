@@ -38,8 +38,9 @@ from alcove.storage import (
     StorageConfig,
     StorageError,
 )
+from alcove.templates import LANGUAGES, Language, check_no_script, write_template
 from alcove.types import StepURI
-from alcove.utils import DATA_IGNORES, checksum_manifest, console
+from alcove.utils import DATA_IGNORES, checksum_manifest, console, print_op
 
 # the .env beside alcove.yaml, wherever alcove itself is installed
 load_dotenv(find_dotenv(usecwd=True))
@@ -174,9 +175,11 @@ def main():
         "dependencies", type=str, nargs="*", help="Optional dependencies for the table"
     )
     new_table_parser.add_argument(
-        "--edit",
-        action="store_true",
-        help="Edit the metadata file in an interactive editor.",
+        "-l",
+        "--lang",
+        required=True,
+        choices=list(LANGUAGES),
+        help="The language of the starter script to write",
     )
 
     new_artifact_parser = subparsers.add_parser(
@@ -254,7 +257,7 @@ def main():
         return duckdb_shell(alcove, names=args.names)
 
     elif args.command == "new-table":
-        return new_table(alcove, args.table_path, args.dependencies, args.edit)
+        return new_table(alcove, args.table_path, args.dependencies, args.lang)
 
     elif args.command == "new-artifact":
         return alcove.new_artifact(args.artifact_path, args.dependencies)
@@ -827,9 +830,31 @@ def audit_step(step: StepURI, fix: bool = False) -> None:
 
 
 def new_table(
-    alcove: Alcove, table_path: str, dependencies: list[str], edit: bool = False
+    alcove: Alcove, table_path: str, dependencies: list[str], lang: Language
 ) -> None:
+    "Register a table in alcove.yaml and write a starter script that builds it."
+    suffix = Path(table_path).suffix
+    if suffix in (".py", ".sql", ".nu", ".parquet"):
+        raise ValueError(
+            f"Leave the {suffix} off the table path; pick the script's language "
+            "with --lang"
+        )
+
+    uri = StepURI("table", table_path)
+    check_no_script(uri)
+
+    # register first: saving alcove.yaml validates the step and its
+    # dependencies, and a failure there should leave no script behind
     alcove.new_table(table_path, dependencies)
+
+    deps = [StepURI.parse(dep) for dep in dependencies]
+    try:
+        script = write_template(alcove, uri, deps, lang)
+    except Exception:
+        del alcove.steps[uri]
+        alcove.save()
+        raise
+    print_op("CREATE", script)
 
 
 def execute_query(

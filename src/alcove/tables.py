@@ -1,4 +1,6 @@
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -110,7 +112,7 @@ def _execute_table_build(
         if command[0].suffix == ".sql":
             _exec_sql_command(uri, command)
         else:
-            _exec_python_command(uri, command)
+            _exec_script_command(uri, command)
 
         if not dest_path.exists():
             raise Exception(
@@ -167,31 +169,36 @@ def _generate_build_command(
     executable = _get_executable(uri)
 
     cmd = [executable]
-
-    # When multiple deps share the same scheme + base_path (1:n wildcard
-    # expansion), collapse them into a single glob path instead of passing
-    # each version individually. Artifacts are passed one directory at a
-    # time: a glob over their parent would also match the .meta.yaml
-    # sidecars that sit beside each version's directory.
-    groups: dict[str, list[StepURI]] = {}
-    for dep in dependencies:
-        groups.setdefault(f"{dep.scheme}://{dep.base_path}", []).append(dep)
-
-    added_globs: set[str] = set()
-    for dep in dependencies:
-        group_key = f"{dep.scheme}://{dep.base_path}"
-        if len(groups[group_key]) > 1 and dep.scheme != "artifact":
-            if group_key not in added_globs:
-                cmd.append(_dependency_glob_path(groups[group_key]))
-                added_globs.add(group_key)
+    for group in _argument_groups(dependencies):
+        if len(group) > 1:
+            cmd.append(_dependency_glob_path(group))
         else:
-            cmd.append(_dependency_path(dep))
+            cmd.append(_dependency_path(group[0]))
 
     if dest_path is None:
         dest_path = TABLE_DIR / f"{uri.path}.parquet"
     cmd.append(dest_path)
 
     return cmd
+
+
+def _argument_groups(dependencies: list[StepURI]) -> list[list[StepURI]]:
+    """The dependencies behind each argument a step's script is given, in order.
+
+    When multiple deps share the same scheme + base_path (1:n wildcard
+    expansion), they collapse into a single glob path instead of passing
+    each version individually. Artifacts are passed one directory at a
+    time: a glob over their parent would also match the .meta.yaml
+    sidecars that sit beside each version's directory.
+    """
+    groups: dict[str, list[StepURI]] = {}
+    for dep in dependencies:
+        if dep.scheme == "artifact":
+            groups[f"{dep}#{len(groups)}"] = [dep]
+        else:
+            groups.setdefault(f"{dep.scheme}://{dep.base_path}", []).append(dep)
+
+    return list(groups.values())
 
 
 def _dependency_path(uri: StepURI) -> Path:
@@ -264,11 +271,36 @@ def run_python_step(command: list[Path]) -> None:
     subprocess.run(command_s, check=True, env=env)
 
 
-def _exec_python_command(uri: StepURI, command: list[Path]) -> None:
+def run_nu_step(command: list[Path]) -> None:
+    """Run a step's nushell script.
+
+    Nushell reads neither config.nu nor env.nu when it runs a script, so a
+    step can't come to depend on commands defined only in someone's shell
+    config. Plugins registered with `plugin add`, such as polars, are still
+    available.
+    """
+    nu = shutil.which("nu")
+    if nu is None:
+        raise FileNotFoundError(
+            f"Running {command[0]} needs nushell, but `nu` is not on the PATH"
+        )
+
+    subprocess.run([nu] + [str(p.resolve()) for p in command], check=True)
+
+
+def run_script_step(command: list[Path]) -> None:
+    "Run a step's build script with nushell if it is a `.nu` file, else Python."
+    if command[0].suffix == ".nu":
+        run_nu_step(command)
+    else:
+        run_python_step(command)
+
+
+def _exec_script_command(uri: StepURI, command: list[Path]) -> None:
     output_file = command[-1]
     is_update = output_file.exists()
 
-    run_python_step(command)
+    run_script_step(command)
 
     if is_update:
         print_op("UPDATE", output_file)
@@ -306,45 +338,48 @@ def _exec_sql_command(uri: StepURI, command: list[Path]) -> None:
 
 
 def _generate_candidate_names(dep: Path) -> Iterator[str]:
+    """Template variable names for a dependency, shortest first: its dataset
+    name, then that name prefixed with each enclosing folder in turn (so
+    `snapshots_foo` and `tables_foo` tell apart a snapshot and a table both
+    called foo), then with its version appended. All-digit names are skipped,
+    since str.format reads `{1990}` as a positional index."""
     parts = dep.parts
-    name = parts[-2]
-    yield name
-
-    candidates = [name]
+    names = [parts[-2]]
     for p in reversed(parts[:-2]):
-        name = f"{p}_{name}"
-        yield name
+        names.append(f"{p}_{names[-1]}")
 
-    version = parts[-1].replace("-", "")
-    candidates.append(f"{name}_{version}")
-    while True:
-        yield name
+    # a glob such as ????-??-??.csv has no version to add
+    version = re.sub(r"\W", "", parts[-1].split(".")[0])
+    if version:
+        names += [f"{parts[-2]}_{version}", f"{names[-1]}_{version}"]
+
+    for name in names:
+        if not name.isdigit():
+            yield name
 
 
 def _simplify_dependency_names(deps: list[Path]) -> dict[str, Path]:
-    mapping = {}
+    """Give each dependency the shortest candidate name that no other
+    dependency shares."""
+    candidates = {d: _generate_candidate_names(d) for d in deps}
+    current = {d: next(candidates[d]) for d in deps}
 
-    to_map = {d: iter(_generate_candidate_names(d)) for d in deps}
-
-    frontier = {d: next(to_map[d]) for d in deps}
-    duplicates = {k for k, v in Counter(frontier.values()).items() if v >= 2}
-
-    for d, name in list(frontier.items()):
-        if d not in duplicates:
-            mapping[name] = d
-            del frontier[d]
-
-    last_duplicates = duplicates
-    while duplicates:
-        frontier = {d: next(to_map[d]) for d in list(frontier)}
-        duplicates = {k for k, v in Counter(frontier.values()).items() if v >= 2}
-        if duplicates == last_duplicates:
-            raise Exception(f"infinite loop resolving dependencies: {deps}")
-
-        for d, name in list(frontier.items()):
-            if d not in duplicates:
+    mapping: dict[str, Path] = {}
+    while current:
+        counts = Counter(current.values())
+        for d, name in list(current.items()):
+            if counts[name] == 1 and name not in mapping:
                 mapping[name] = d
-                del frontier[d]
+                del current[d]
+
+        for d in current:
+            try:
+                current[d] = next(candidates[d])
+            except StopIteration:
+                raise ValueError(
+                    f"Cannot give {d} a template variable name distinct from "
+                    f"the other dependencies: {deps}"
+                )
 
     return mapping
 
@@ -405,31 +440,3 @@ def _infer_schema(uri: StepURI) -> dict[str, str]:
     data_path = TABLE_DIR / f"{uri.path}.parquet"
     df = pl.read_parquet(data_path)
     return {col: str(dtype) for col, dtype in df.schema.items()}
-
-
-def add_placeholder_script(uri: StepURI) -> Path:
-    script_path = _get_executable(uri, check=False)
-    if script_path.exists():
-        raise ValueError(f"Script already exists: {script_path}")
-
-    script_path.parent.mkdir(parents=True, exist_ok=True)
-    content = """#!/usr/bin/env python3
-import sys
-import polars as pl
-
-data = {
-    "a": [1, 1, 3],
-    "b": [2, 3, 5],
-    "c": [3, 4, 6]
-}
-
-df = pl.DataFrame(data)
-
-output_file = sys.argv[-1]
-df.write_parquet(output_file)
-"""
-
-    script_path.write_text(content)
-    script_path.chmod(0o755)
-
-    return script_path

@@ -6,7 +6,8 @@ still a pure function of its dependencies: a rendered HTML dashboard, a fitted
 model, a generated report, a bundle of images.
 
 An artifact is built by an executable Python script at
-``src/steps/artifacts/<path>.py``. It is called with the path of each
+``src/steps/artifacts/<path>.py``, or a nushell script at
+``src/steps/artifacts/<path>.nu``. It is called with the path of each
 dependency followed by an empty output directory, and must write at least one
 file into that directory. Alcove then checksums every file it produced and
 records the manifest, along with the checksums of the script and dependency
@@ -27,7 +28,7 @@ from alcove.tables import (
     _generate_build_command,
     _generate_input_manifest,
     _inputs_unchanged,
-    run_python_step,
+    run_script_step,
     timed_run,
 )
 from alcove.types import Manifest, StepURI
@@ -119,7 +120,7 @@ def _reset_dir(path: Path) -> None:
 
 
 def _execute_artifact_build(command: list[Path]) -> dict[str, Any]:
-    return timed_run(lambda: run_python_step(command))
+    return timed_run(lambda: run_script_step(command))
 
 
 def _checksum_output(uri: StepURI, build_path: Path) -> Manifest:

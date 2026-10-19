@@ -32,7 +32,7 @@ alcove init
 alcove snapshot ~/Downloads/countries.csv countries/latest
 
 # Create a derived table
-alcove new-table derived/population.sql countries/latest
+alcove new-table population/latest snapshot://countries/latest --lang sql
 
 # Build all tables
 alcove run

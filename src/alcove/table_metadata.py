@@ -275,17 +275,18 @@ def step_folder_files(folder: Path) -> Iterator[Path]:
 def _get_executable(uri: StepURI, check: bool = True) -> Path:
     """Find what builds a step.
 
-    In order of precedence: a `<path>.py` or `<path>.sql` script, a step
-    folder `<path>/` holding a `__main__.py` entrypoint (Python runs the
-    folder), or a `<parent>.py` / `<parent>.sql` script shared across every
-    version of the step. A step folder can carry other files beside the
+    In order of precedence: a `<path>.py`, `<path>.sql` or `<path>.nu`
+    script, a step folder `<path>/` holding a `__main__.py` entrypoint (Python
+    runs the folder), or a `<parent>.py` / `<parent>.sql` / `<parent>.nu`
+    script shared across every version of the step. A step folder can carry other files beside the
     entrypoint, such as templates or lookup data, and the whole folder counts
     as the step's input.
     """
     base = _script_dir(uri) / uri.path
 
-    # artifacts are built by Python only; SQL steps always produce a table
-    suffixes = [".py", ".sql"] if uri.scheme == "table" else [".py"]
+    # SQL steps always produce a table, so artifacts are built by a Python or
+    # nushell script
+    suffixes = [".py", ".sql", ".nu"] if uri.scheme == "table" else [".py", ".nu"]
 
     for exec_base in [base, base.parent]:
         for suffix in suffixes:
@@ -302,7 +303,7 @@ def _get_executable(uri: StepURI, check: bool = True) -> Path:
             return base
 
     hint = (
-        " (artifacts must be built by a Python script)"
+        " (artifacts must be built by a Python or nushell script)"
         if uri.scheme == "artifact"
         else ""
     )

@@ -33,7 +33,7 @@ alcove init
 alcove snapshot ~/Downloads/countries.csv countries/latest
 
 # Create a derived table
-alcove new-table derived/population.sql countries/latest
+alcove new-table population/latest snapshot://countries/latest --lang sql
 
 # Build all tables
 alcove run
@@ -174,63 +174,40 @@ The metadata format has some minimum fields, but is meant for you to extend as n
 
 ### Creating a new table
 
-To create a new table, use the `new-table` command:
+To create a new table, use the `new-table` command and pick the language of its script with `-l`/`--lang`:
 
 ```bash
-alcove new-table <table-path> [dep1 [dep2 [...]]]
+alcove new-table <table-path> [dep1 [dep2 [...]]] --lang python|sql|nushell
 ```
 
-This creates a placeholder executable script that generates an example data file based on the file extension (.parquet or .sql).
-
-#### Creating a Parquet table
+This registers the table in `alcove.yaml` and writes a starter script to `src/steps/tables/<table-path>.py`, `.sql` or `.nu`. For a wildcard table such as `daily/*`, the script is `src/steps/tables/daily.py`, shared by every version. The script runs as written: with no dependencies it writes a small example table, and otherwise it copies its first dependency into the table. Its header comments say which variable holds each dependency's path. For example:
 
 ```bash
-alcove new-table path/to/your/table
+alcove new-table countries/latest snapshot://countries/latest --lang python
 ```
 
-This creates a placeholder Python script that generates an example Parquet file:
+writes:
 
 ```python
 #!/usr/bin/env python3
+#
+#  Builds table://countries/latest. Alcove calls this script with the path of each
+#  dependency, then the Parquet file to write:
+#
+#    deps[0]      snapshot://countries/latest
+#    output_file  the Parquet file to write
+#
 import sys
+
 import polars as pl
 
-data = {
-    "a": [1, 1, 3],
-    "b": [2, 3, 5],
-    "c": [3, 4, 6]
-}
+*deps, output_file = sys.argv[1:]
 
-df = pl.DataFrame(data)
-
-output_file = sys.argv[-1]
+df = pl.read_csv(deps[0])
 df.write_parquet(output_file)
 ```
 
-#### Creating a SQL table
-
-```bash
-alcove new-table path/to/your/table.sql
-```
-
-This creates a placeholder SQL script:
-
-```sql
--- SQL script to create a table
-CREATE TABLE example_table AS
-SELECT
-    1 AS a,
-    2 AS b,
-    3 AS c
-```
-
-#### Opening in your editor
-
-The command also supports the `--edit` option to open the metadata file in your editor:
-
-```bash
-alcove new-table path/to/your/table --edit
-```
+Python scripts read the dependency with polars, SQL scripts with DuckDB, and nushell scripts with nushell's polars plugin, which must be registered with `plugin add`. Templates copy tables and CSV, TSV, Parquet, JSON or NDJSON snapshots. For any other dependency, such as a directory snapshot, another file format or an artifact, the script writes the example table instead, with a comment saying to replace it.
 
 ### Creating an artifact
 
@@ -260,7 +237,7 @@ daily = pl.read_parquet(deps[0])
 (Path(out_dir) / "index.html").write_text(f"<h1>{len(daily)} days</h1>")
 ```
 
-The output lands in `data/artifacts/<artifact-path>/`, with a `.meta.yaml` sidecar recording a checksum of every file produced and of every input. Artifacts rebuild when any dependency or the script changes, can depend on snapshots, tables and other artifacts, and can be depended on by tables in turn. Artifact scripts must be Python; they do not appear in `alcove db`.
+The output lands in `data/artifacts/<artifact-path>/`, with a `.meta.yaml` sidecar recording a checksum of every file produced and of every input. Artifacts rebuild when any dependency or the script changes, can depend on snapshots, tables and other artifacts, and can be depended on by tables in turn. Artifact scripts must be Python or [nushell](#nushell-steps); they do not appear in `alcove db`.
 
 ### Steps as folders
 
@@ -272,15 +249,36 @@ src/steps/artifacts/reports/health/latest/
 └── template.html    # read relative to __file__
 ```
 
-A single `<path>.py` or `<path>.sql` file takes precedence over a folder at the same path, and the folder takes precedence over a version-shared `<parent>.py`. The optional metadata config for a folder step sits beside it as `<path>.meta.yaml`, exactly as for a single-file step.
+A single `<path>.py`, `<path>.sql` or `<path>.nu` file takes precedence over a folder at the same path, and the folder takes precedence over a version-shared `<parent>.py`, `<parent>.sql` or `<parent>.nu`. The optional metadata config for a folder step sits beside it as `<path>.meta.yaml`, exactly as for a single-file step.
 
 What counts as part of the folder: every regular file, following symlinked directories, so a template shared between steps through a symlink is still an input. Dangling symlinks are an error. Ignored: `__pycache__`, anything starting with a dot (editor swap files, `.ruff_cache`, `.DS_Store`), and editor backups ending in `~` or wrapped in `#`. Step scripts run with bytecode caching disabled and redirected, so a `__pycache__` left inside the folder by running the script by hand is neither read nor written.
 
+### Nushell steps
+
+A table or artifact step can be a nushell script, `<path>.nu`, which alcove runs with the `nu` on your `PATH`. Its arguments are the same as a Python step's: the path of each dependency, then the output path. Take them as one rest parameter and split off the last. Nushell doesn't stop you declaring a positional parameter after a rest parameter, but `def main [...deps: path, dest: path]` silently puts the first argument in `$dest`.
+
+```nu
+#!/usr/bin/env nu
+plugin use polars
+
+def main [...args: path] {
+    let dest = $args | last
+    let deps = $args | drop 1
+
+    polars open --eager $deps.0
+    | polars filter ((polars col value) > 0)
+    | polars save $dest
+}
+```
+
+Plain nushell can read CSV and JSON snapshots, but it can neither read nor write Parquet. So a step that depends on a table, and every table step's output, goes through the [polars plugin](https://www.nushell.sh/book/dataframes.html), as in the example, or the `duckdb` CLI. Several versions of one dependency, such as a wildcard's partitions, arrive as a single glob pattern like `data/tables/foo/*.parquet`. `polars open --eager` can't read a pattern. Open it lazily and collect it (`polars open $dep | polars collect`), or expand it with `glob $dep`. Plain `open` on a pattern returns nothing rather than failing. Nushell reads neither `config.nu` nor `env.nu` when it runs a script, so commands defined only in your shell config aren't available to a step; plugins registered with `plugin add` are. As with Python packages, the version of nushell and its plugins isn't part of a step's checksum, so upgrading them doesn't rebuild anything.
+
+A `<path>.py` or `<path>.sql` script takes precedence over a `<path>.nu` beside it. Step folders need a `__main__.py` entrypoint, so a nushell step is always a single file: a module it loads with `use ./helpers.nu` isn't part of its checksum, and editing that module doesn't rebuild the step.
+
 ### Executing SQL step definitions
 
-If a `.sql` step definition is detected, it will be executed using DuckDB with an in-memory database. The SQL file can use `{variable}` to interpolate template variables. The following template variables are available:
+If a `.sql` step definition is detected, it will be executed using DuckDB with an in-memory database. The SQL file can use `{variable}` to interpolate template variables, one for each dependency:
 
-- `{output_file}`: The path to the output file.
 - `{dependency}`: The path of each dependency, simplified to a semantic name.
 
 ### Command Reference
@@ -292,7 +290,7 @@ Alcove provides the following commands:
 - `alcove run` - Build all tables and fetch outdated data
 - `alcove list` - List all datasets, dependencies first, with consecutive days collapsed into one range (`--full` lists each one)
 - `alcove audit` - Validate the alcove metadata
-- `alcove new-table <path> [deps...]` - Create a new derived table
+- `alcove new-table <path> [deps...] --lang <lang>` - Create a new derived table
 - `alcove new-artifact <path> [deps...]` - Create a derived output that is not a table
 - `alcove db [query]` - Open a DuckDB shell or execute a query
 - `alcove export-duckdb <file>` - Export tables to a DuckDB file
@@ -354,6 +352,11 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
   - Fetching a folder snapshot that has subfolders over an existing copy no longer fails trying to delete those subfolders as stray files
   - `.env` is read from the directory alcove runs in (or the nearest parent with one), wherever alcove is installed; previously it was looked for beside the `alcove` script, so an alcove whose virtualenv lived elsewhere didn't see its `.env`
   - `alcove list` collapses each run of consecutive daily versions of a dataset into one line, e.g. `snapshot://gpu/usage/[2026-01-01 -> 2026-10-07]`, and lists datasets after the datasets they depend on; `--full` lists every version and `--alphabetical` restores the old order. `--paths` still lists every path. `list_steps()` in Python also returns dependency order unless given `alphabetical=True`
+  - Table and artifact steps can be nushell scripts, `<path>.nu`, run with the `nu` on your `PATH` and given the same arguments as Python steps (see [Nushell steps](#nushell-steps))
+  - `alcove new-table` requires `--lang python|sql|nushell` and writes a starter script in that language that runs as written: it copies the first dependency into the table, or writes an example table if there are none or alcove can't read the first, and its comments name the variable holding each dependency's path. Previously it wrote no script
+  - Removed the `{output_file}` SQL template variable from the docs; SQL steps never had it
+  - SQL template variables tell apart dependencies that share a name, such as `snapshot://countries/latest` and `table://countries/latest` (now `{snapshots_countries}` and `{tables_countries}`), and a dataset named with digits, such as `who/1990`, gets a name `str.format` accepts (`{who_1990}`). Previously the second dependency silently took the first one's name, and an all-digit name failed. A SQL step that used the shared name (`{countries}`) must switch to the new names
+  - Removed `alcove new-table --edit`, which did nothing
 - `0.5.1` (2026-10-09)
   - `alcove run` downloads snapshot files several at a time, 8 by default (`--jobs`/`-j`), and downloads each distinct file once however many snapshots hold it; previously it downloaded one file at a time, making a new S3 client for each. A failed download or Ctrl-C abandons the downloads still in progress rather than waiting for them
   - A file is added to the local cache under a temporary name and renamed into place, so an interrupted run can't leave a partial file that later reads as a cache hit (it can leave a `*.partial` file beside it, which is never read)

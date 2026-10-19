@@ -139,7 +139,7 @@ def test_missing_script_keeps_previous_artifact(setup_test_environment):
     build_artifact(uri, [])
 
     script.unlink()
-    with pytest.raises(FileNotFoundError, match="Python script"):
+    with pytest.raises(FileNotFoundError, match="Python or nushell script"):
         build_artifact(uri, [])
 
     assert (artifact_path(uri) / "index.html").exists()
