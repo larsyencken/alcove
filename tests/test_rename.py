@@ -405,3 +405,21 @@ def test_rename_keeps_symlinks_between_parts_of_the_dataset(project, capsys):
     assert Path("src/steps/tables/geo/nations/abs.txt").read_text() == "x"
     assert "is a symlink" not in capsys.readouterr().out
     plan_and_run(Alcove())
+
+
+def test_rename_repoints_links_into_the_dataset_from_elsewhere(project):
+    target = Path("src/steps/tables/geo/countries/shared.txt")
+    target.write_text("x")
+    other = Path("src/steps/tables/other/latest")
+    other.mkdir(parents=True)
+    (other / "relative.txt").symlink_to("../../geo/countries/shared.txt")
+    # spelled through a symlinked folder, as macOS spells /private/tmp as /tmp
+    alias = Path("alias")
+    alias.symlink_to(Path(".").resolve())
+    (other / "absolute.txt").symlink_to(Path.cwd() / alias / target)
+    assert (other / "absolute.txt").read_text() == "x"
+
+    rename_dataset(Alcove(), "table://geo/countries", "table://geo/nations")
+
+    assert (other / "relative.txt").read_text() == "x"
+    assert (other / "absolute.txt").read_text() == "x"

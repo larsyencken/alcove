@@ -464,12 +464,12 @@ def _describe_update(plan: RenamePlan, path: Path) -> str:
 
 
 def _execute(alcove: Alcove, plan: RenamePlan) -> None:
+    links = _links_to_repoint(plan)
     for src, dest in plan.moves:
-        links = _outward_links(src, plan)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dest)
         _remove_empty_parents(src.parent)
-        _repoint_links(src, dest, links)
+    _repoint_links(links)
 
     real = {p.resolve() for p in plan.rewritten if not p.is_symlink()}
     for path in plan.rewritten:
@@ -509,45 +509,61 @@ def _execute(alcove: Alcove, plan: RenamePlan) -> None:
     alcove.refresh()
 
 
-def _outward_links(src: Path, plan: RenamePlan) -> dict[Path, Path]:
-    """Symlinks in what's being moved whose target would no longer be where
-    they point once everything has moved, and where each should point: a
-    relative link leaving the moved tree, such as a template shared between
-    step folders, or any link into a part of the dataset that moves."""
-    candidates = [src] if src.is_symlink() or not src.is_dir() else []
-    if src.is_dir() and not src.is_symlink():
-        candidates += [p for p in src.rglob("*") if p.is_symlink()]
+def _link_target(link: Path) -> Path | None:
+    """What a symlink points at, relative to the project, or None if it points
+    outside it. An absolute target may be spelled through a symlink, e.g.
+    macOS's /tmp for /private/tmp, so its folder is resolved first."""
+    target = Path(os.readlink(link))
+    if not target.is_absolute():
+        return Path(os.path.normpath(link.parent / target))
 
-    cwd = Path.cwd()
-    links = {}
-    for link in candidates:
-        if not link.is_symlink():
+    resolved = Path(os.path.realpath(target.parent)) / target.name
+    cwd = Path.cwd().resolve()
+    if not resolved.is_relative_to(cwd):
+        return None
+    return resolved.relative_to(cwd)
+
+
+def _links_to_repoint(plan: RenamePlan) -> list[tuple[Path, Path, bool]]:
+    """Symlinks whose target would no longer be where they point once
+    everything has moved: a relative link in the dataset leaving its moved
+    tree, such as a template shared between step folders, or any link into
+    a part of the dataset that moves, including from another step's folder.
+    Each is given as where the link will be, where it should point, and
+    whether to point there by absolute path."""
+    sources = [src for src, _ in plan.moves]
+    links = {p for src in sources if src.is_symlink() for p in [src]}
+    for root in [*SCRIPT_DIRS, *DATA_DIRS.values()]:
+        if root.is_dir():
+            links |= {p for p in root.rglob("*") if p.is_symlink()}
+
+    found = []
+    for link in sorted(links):
+        target = _link_target(link)
+        if target is None:
             continue
-        target = Path(os.readlink(link))
-        resolved = Path(os.path.normpath(link.parent / target))
-        if target.is_absolute():
-            if not resolved.is_relative_to(cwd):
-                continue
-            resolved = resolved.relative_to(cwd)
-        # where its target will be, which may itself move
-        new_target = plan.moved(resolved)
-        if target.is_absolute():
-            if new_target != resolved:
-                links[link] = cwd / new_target
-        elif link == src or not resolved.is_relative_to(src):
-            links[link] = new_target
-    return links
-
-
-def _repoint_links(src: Path, dest: Path, links: dict[Path, Path]) -> None:
-    "Point moved symlinks where their targets are now."
-    for link, target in links.items():
-        moved = dest / link.relative_to(src)
-        moved.unlink()
-        if target.is_absolute():
-            moved.symlink_to(target)
+        new_link = plan.moved(link)
+        new_target = plan.moved(target)
+        absolute = Path(os.readlink(link)).is_absolute()
+        if absolute:
+            stale = new_target != target
         else:
-            moved.symlink_to(os.path.relpath(target, moved.parent))
+            # a relative link moved along with its target stays right
+            stale = os.path.relpath(new_target, new_link.parent) != os.readlink(link)
+        if stale:
+            found.append((new_link, new_target, absolute))
+    return found
+
+
+def _repoint_links(links: list[tuple[Path, Path, bool]]) -> None:
+    "Point moved symlinks where their targets are now."
+    for link, target, absolute in links:
+        link.unlink()
+        if absolute:
+            link.symlink_to(Path.cwd().resolve() / target)
+        else:
+            link.symlink_to(os.path.relpath(target, link.parent))
+        print_op("UPDATE", f"{link} -> {os.readlink(link)}")
 
 
 def _remove_empty_parents(folder: Path) -> None:
