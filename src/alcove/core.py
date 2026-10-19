@@ -73,21 +73,20 @@ class Alcove:
                 existing = StorageConfig.load(alcove_file)
                 if existing != storage:
                     raise ValueError(
-                        f"{alcove_file} already keeps its data in "
-                        f"{existing.backend} storage, not {storage.backend}"
+                        f"{alcove_file} already keeps its data in {existing}, "
+                        f"not {storage}; edit its `storage` key to change that"
                     )
 
         return Alcove()
 
     def save(self) -> None:
-        config = {
-            **self.settings,
-            "version": self.version,
-            "steps": {
-                str(k): [str(v) for v in vs]
-                for k, vs in sorted(self.steps.items())
-                if k not in self.discovered
-            },
+        config = {**self.settings, "version": self.version}
+        if "storage" in self.settings or self.storage != StorageConfig():
+            config["storage"] = self.storage.to_yaml()
+        config["steps"] = {
+            str(k): [str(v) for v in vs]
+            for k, vs in sorted(self.steps.items())
+            if k not in self.discovered
         }
         jsonschema.validate(config, ALCOVE_SCHEMA)
         save_yaml(config, self.config_file)
