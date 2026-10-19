@@ -29,6 +29,7 @@ from alcove.storage import (
 )
 from alcove.types import Checksum, DatasetName, Manifest, StepURI
 from alcove.utils import (
+    EmptyFolderError,
     checksum_file,
     checksum_folder,
     checksum_manifest,
@@ -195,10 +196,15 @@ class Snapshot:
             return self.path.exists() and self.checksum == checksum_file(self.path)
 
         elif self.snapshot_type == "directory":
-            # a fetch that failed can leave the directory empty
-            if not self.path.is_dir() or not any(self.path.iterdir()):
+            if not self.path.is_dir():
                 return False
-            return self.checksum == checksum_manifest(checksum_folder(self.path))
+            try:
+                manifest = checksum_folder(self.path)
+            except EmptyFolderError:
+                # a fetch that failed can leave the folder, or its
+                # subfolders, without any files
+                return False
+            return self.checksum == checksum_manifest(manifest)
 
         raise ValueError(f"Unknown snapshot type: {self.snapshot_type}")
 
@@ -216,10 +222,14 @@ class Snapshot:
         elif self.snapshot_type == "directory":
             assert self.manifest is not None
 
-            # if the diretory exists, remove any files that are not in the manifest
+            # if the diretory exists, remove any files that are not in the
+            # manifest, whose names are paths relative to it
             if self.path.exists():
-                for file_name in self.path.iterdir():
-                    if file_name.name not in self.manifest:
+                for file_name in list(self.path.rglob("*")):
+                    if file_name.is_dir() and not file_name.is_symlink():
+                        continue
+                    rel_path = str(file_name.relative_to(self.path))
+                    if rel_path not in self.manifest:
                         print_op("DELETE", file_name)
                         file_name.unlink()
 

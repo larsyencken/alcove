@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import duckdb
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from alcove import steps
 from alcove.core import Alcove
@@ -31,11 +31,18 @@ from alcove.partitions import (
     tidy_orphans,
 )
 from alcove.snapshots import DEFAULT_FETCH_JOBS, Snapshot
-from alcove.storage import BACKENDS, DEFAULT_LOCAL_STORE, GitStore, StorageConfig
+from alcove.storage import (
+    BACKENDS,
+    DEFAULT_LOCAL_STORE,
+    GitStore,
+    StorageConfig,
+    StorageError,
+)
 from alcove.types import StepURI
 from alcove.utils import DATA_IGNORES, checksum_manifest, console
 
-load_dotenv()
+# the .env beside alcove.yaml, wherever alcove itself is installed
+load_dotenv(find_dotenv(usecwd=True))
 
 
 BLACKLIST = [".DS_Store"]
@@ -214,7 +221,10 @@ def main():
         storage = None
         if args.storage:
             storage = StorageConfig(backend=args.storage, path=args.path)
-        return init_alcove(storage)
+        try:
+            return init_alcove(storage)
+        except (StorageError, ValueError) as e:
+            parser.exit(1, f"alcove: error: {e}\n")
 
     alcove = Alcove()
 

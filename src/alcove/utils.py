@@ -26,6 +26,10 @@ def checksum_file(file_path: Union[str, Path]) -> Checksum:
     return sha256.hexdigest()
 
 
+class EmptyFolderError(Exception):
+    "A folder has no files to checksum."
+
+
 def checksum_folder(dir_path: Path) -> Manifest:
     manifest = {}
     # walk the subdirectory tree, adding relative path and checksums to the manifest
@@ -37,7 +41,7 @@ def checksum_folder(dir_path: Path) -> Manifest:
             manifest[str(rel_path)] = checksum_file(file_path)
 
     if not manifest:
-        raise Exception(f'No files found in "{dir_path}" to checksum')
+        raise EmptyFolderError(f'No files found in "{dir_path}" to checksum')
 
     return manifest
 

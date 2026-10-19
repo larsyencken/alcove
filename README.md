@@ -150,7 +150,7 @@ git fetch origin 'refs/alcove/*:refs/alcove/*'   # get it in another clone
 git bundle create incident.bundle --all          # code and data in one file
 ```
 
-Git storage suits small to medium data: git is slow with very large files, and hosts limit file size (100 MB on GitHub). It doesn't use the `~/.cache/alcove` cache either.
+Git storage suits small to medium data. Git compresses each file as it's stored, which is slow for large ones (about 18 s per GB), and reading a file back needs memory about the size of the file, for each of the files `alcove run` fetches at once (`--jobs`). Hosts also limit file size (100 MB on GitHub). Git storage doesn't use the `~/.cache/alcove` cache either.
 
 Now your alcove is ready to use.
 
@@ -350,7 +350,9 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 - `dev`
   - Snapshot data can be kept in a local directory (`alcove init --storage local`) or in the git repo itself under `refs/alcove/blobs` (`alcove init --storage git`), as well as in S3; the choice is saved as `storage` in `alcove.yaml`, and neither needs S3 credentials or uses `~/.cache/alcove`
   - Saving `alcove.yaml` keeps settings other than `steps`; previously it dropped them, including `data_dir`
-  - A snapshot folder left empty by a failed download is fetched again; previously the next `alcove run` failed with `No files found ... to checksum`
+  - A snapshot folder left without files by a failed download, even if it still has subfolders, is fetched again; previously the next `alcove run` failed with `No files found ... to checksum`
+  - Fetching a folder snapshot that has subfolders over an existing copy no longer fails trying to delete those subfolders as stray files
+  - `.env` is read from the directory alcove runs in (or the nearest parent with one), wherever alcove is installed; previously it was looked for beside the `alcove` script, so an alcove whose virtualenv lived elsewhere didn't see its `.env`
   - `alcove list` collapses each run of consecutive daily versions of a dataset into one line, e.g. `snapshot://gpu/usage/[2026-01-01 -> 2026-10-07]`, and lists datasets after the datasets they depend on; `--full` lists every version and `--alphabetical` restores the old order. `--paths` still lists every path. `list_steps()` in Python also returns dependency order unless given `alphabetical=True`
 - `0.5.1` (2026-10-09)
   - `alcove run` downloads snapshot files several at a time, 8 by default (`--jobs`/`-j`), and downloads each distinct file once however many snapshots hold it; previously it downloaded one file at a time, making a new S3 client for each. A failed download or Ctrl-C abandons the downloads still in progress rather than waiting for them

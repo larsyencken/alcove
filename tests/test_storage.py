@@ -288,7 +288,7 @@ def test_git_store_commits_without_a_configured_identity(
 
 
 def test_git_storage_needs_a_git_repo(offline):
-    with pytest.raises(StorageError, match="rev-parse"):
+    with pytest.raises(StorageError, match="git init"):
         init_alcove(StorageConfig("git"))
     assert not Path("alcove.yaml").exists()
 
@@ -332,3 +332,71 @@ def test_git_store_keeps_bytes_exactly_despite_attributes(offline, tmp_path):
 def test_an_unknown_backend_is_rejected():
     with pytest.raises(StorageError, match="unknown storage backend 'gti'"):
         StorageConfig.parse("gti")
+
+
+def test_a_folder_left_with_only_empty_subfolders_is_fetched_again(offline, tmp_path):
+    "A failed fetch can leave subfolders behind but no files."
+    init_alcove(StorageConfig("local"))
+    folder = tmp_path / "folder"
+    (folder / "nested").mkdir(parents=True)
+    (folder / "nested" / "a.txt").write_text("a")
+    snapshot_to_alcove(folder, "example/nested/2024-07-26")
+
+    restored = Path("data/snapshots/example/nested/2024-07-26")
+    (restored / "nested" / "a.txt").unlink()
+    assert (restored / "nested").is_dir()
+
+    plan_and_run(Alcove())
+    assert (restored / "nested" / "a.txt").read_text() == "a"
+
+
+def test_git_store_takes_a_file_name_with_a_newline(offline, tmp_path):
+    git("init", "-q")
+    init_alcove(StorageConfig("git"))
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    (folder / "x\ny.txt").write_text("odd name")
+    (folder / "x").write_text("decoy")
+    snapshot_to_alcove(folder, "example/odd/2024-07-26")
+
+    restored = Path("data/snapshots/example/odd/2024-07-26")
+    shutil.rmtree(restored)
+    plan_and_run(Alcove())
+    assert (restored / "x\ny.txt").read_text() == "odd name"
+    assert (restored / "x").read_text() == "decoy"
+
+
+def test_a_storage_path_only_applies_to_local():
+    with pytest.raises(StorageError, match="only applies to local"):
+        StorageConfig.parse({"backend": "git", "path": "blobs"})
+
+
+def test_the_cli_reads_env_from_the_alcove_not_from_where_it_is_installed(
+    offline, tmp_path
+):
+    "Where the local store goes must not depend on how alcove was installed."
+    elsewhere = tmp_path / "volume"
+    Path(".env").write_text(f"{storage.LOCAL_STORE_ENV}={elsewhere}\n")
+    single, _ = make_inputs(tmp_path)
+
+    # the installed script, run from the alcove, as a user would
+    alcove = Path(sys.executable).parent / "alcove"
+    subprocess.run([alcove, "init", "--storage", "local"], check=True)
+    subprocess.run(
+        [alcove, "snapshot", single, "example/single/2024-07-26"], check=True
+    )
+
+    assert not Path(".alcove").exists()
+    assert len([p for p in elsewhere.rglob("*") if p.is_file()]) == 1
+
+
+def test_init_explains_why_it_cannot_continue(offline):
+    alcove = Path(sys.executable).parent / "alcove"
+    result = subprocess.run(
+        [alcove, "init", "--storage", "git"], capture_output=True, text=True
+    )
+    assert result.returncode == 1
+    assert (
+        result.stderr
+        == "alcove: error: git storage needs a git repo; run `git init` first\n"
+    )

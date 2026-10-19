@@ -5,10 +5,12 @@
 #
 
 import os
+import random
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional, Protocol, Union
@@ -21,6 +23,12 @@ BACKENDS: tuple[Backend, ...] = ("s3", "local", "git")
 
 DEFAULT_LOCAL_STORE = Path(".alcove") / "blobs"
 GIT_REF = "refs/alcove/blobs"
+
+# files hashed per call to git, to keep its command line short
+HASH_BATCH = 200
+
+# times a write to the git store tries to move the ref before giving up
+PUT_ATTEMPTS = 30
 
 # overrides `path` for a local store, for a store kept on another volume
 LOCAL_STORE_ENV = "ALCOVE_LOCAL_STORE"
@@ -53,7 +61,14 @@ class StorageConfig:
                 f"unknown storage backend {value.get('backend')!r}, "
                 f"expected one of {', '.join(BACKENDS)}"
             )
+        if value.get("path") is not None and value["backend"] != "local":
+            raise StorageError("a storage path only applies to local storage")
         return StorageConfig(backend=value["backend"], path=value.get("path"))
+
+    def __str__(self) -> str:
+        if self.path is None:
+            return self.backend
+        return f"{self.backend} storage at {self.path}"
 
     def to_yaml(self) -> Union[str, dict]:
         if self.path is None:
@@ -135,7 +150,12 @@ class GitStore:
 
     def check(self) -> None:
         "Fail unless we're inside a git repo."
-        self._git("rev-parse", "--git-dir")
+        try:
+            self._git("rev-parse", "--git-dir")
+        except StorageError:
+            raise StorageError(
+                "git storage needs a git repo; run `git init` first"
+            ) from None
 
     def _head(self) -> Optional[str]:
         result = subprocess.run(
@@ -153,21 +173,29 @@ class GitStore:
         for file_path, _ in files:
             print_op("STORE", file_path)
 
-        paths = "".join(f"{os.path.abspath(p)}\n" for p, _ in files)
         # stored byte for byte: the repo's attributes (autocrlf, clean
-        # filters) would otherwise change the data away from its checksum
-        oids = self._git(
-            "hash-object", "-w", "--no-filters", "--stdin-paths", input=paths
-        ).split()
+        # filters) would otherwise change the data away from its checksum.
+        # Paths go as arguments, not --stdin-paths, which can't take a newline.
+        oids: list[str] = []
+        for i in range(0, len(files), HASH_BATCH):
+            batch = [os.path.abspath(p) for p, _ in files[i : i + HASH_BATCH]]
+            oids += self._git("hash-object", "-w", "--no-filters", "--", *batch).split()
+        if len(oids) != len(files):
+            raise StorageError(
+                f"git hash-object gave {len(oids)} ids for {len(files)} files"
+            )
+
         entries = "".join(
             f"100644 {oid}\t{blob_path(checksum)}\n"
             for oid, (_, checksum) in zip(oids, files)
         )
 
         with self._lock:
-            for _ in range(5):
+            for attempt in range(PUT_ATTEMPTS):
                 if self._add_to_tree(entries):
                     return
+                # other processes are adding too; let them get out of the way
+                time.sleep(random.uniform(0, 0.05 * (attempt + 1)))
         raise StorageError(f"{GIT_REF} kept changing while adding to it")
 
     def _add_to_tree(self, entries: str) -> bool:
@@ -198,7 +226,10 @@ class GitStore:
 
     def get(self, checksum: Checksum, dest_path: Path) -> None:
         spec = f"{GIT_REF}:{blob_path(checksum)}"
-        if subprocess.run(["git", "cat-file", "-e", spec], cwd=self.cwd).returncode:
+        exists = subprocess.run(
+            ["git", "cat-file", "-e", spec], cwd=self.cwd, capture_output=True
+        )
+        if exists.returncode:
             raise StorageError(
                 f"{checksum} is not in {GIT_REF}; if it was stored in another "
                 "clone, try `git fetch origin 'refs/alcove/*:refs/alcove/*'`"

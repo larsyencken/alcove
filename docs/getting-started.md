@@ -104,7 +104,7 @@ git fetch origin 'refs/alcove/*:refs/alcove/*'   # get it in another clone
 git bundle create incident.bundle --all          # code and data in one file
 ```
 
-Git storage suits small to medium data: git is slow with very large files, and hosts limit file size (100 MB on GitHub). It doesn't use the `~/.cache/alcove` cache either.
+Git storage suits small to medium data. Git compresses each file as it's stored, which is slow for large ones (about 18 s per GB), and reading a file back needs memory about the size of the file, for each of the files `alcove run` fetches at once (`--jobs`). Hosts also limit file size (100 MB on GitHub). Git storage doesn't use the `~/.cache/alcove` cache either.
 
 Now your alcove is ready to use.
 
