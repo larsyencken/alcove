@@ -9,7 +9,7 @@
     },
     "uri": {
       "type": "string",
-      "pattern": "^snapshot://[a-z0-9-_/]+$"
+      "pattern": "^snapshot://([a-z0-9_]+/)*[a-z0-9_-]+$"
     },
     "checksum": {
       "type": "string",

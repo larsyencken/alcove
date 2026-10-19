@@ -19,7 +19,7 @@ import jsonschema
 from botocore.config import Config
 
 from alcove.paths import BASE_DIR, SNAPSHOT_DIR
-from alcove.schemas import SNAPSHOT_SCHEMA, validate_snapshot
+from alcove.schemas import SNAPSHOT_SCHEMA, check_step_uri, validate_snapshot
 from alcove.storage import (
     BlobStore,
     GitStore,
@@ -90,6 +90,7 @@ class Snapshot:
     def create(
         local_path: Path, dataset_name: str, metadata: Optional[dict[str, Any]] = None
     ) -> "Snapshot":
+        check_step_uri(f"snapshot://{dataset_name}")
         if local_path.is_dir():
             snapshot = Snapshot.create_from_directory(
                 local_path, dataset_name, metadata

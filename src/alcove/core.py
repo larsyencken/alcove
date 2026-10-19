@@ -5,7 +5,7 @@ from typing import Literal
 import jsonschema
 
 from alcove.partitions import discover_partitions
-from alcove.schemas import ALCOVE_SCHEMA
+from alcove.schemas import ALCOVE_SCHEMA, check_step_uri
 from alcove.storage import StorageConfig
 from alcove.types import Dag, StepURI
 from alcove.utils import load_yaml, save_yaml
@@ -98,6 +98,9 @@ class Alcove:
         uri = StepURI(scheme, path)
         if uri in self.steps:
             raise ValueError(f"{scheme.capitalize()} already exists in alcove: {uri}")
+
+        for name in [str(uri), *dependencies]:
+            check_step_uri(name)
 
         self.steps[uri] = [StepURI.parse(dep) for dep in dependencies]
         self.save()

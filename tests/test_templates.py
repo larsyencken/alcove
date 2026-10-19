@@ -5,7 +5,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import jsonschema
 import polars as pl
 import pytest
 from alcove import new_table, plan_and_run, snapshot_to_alcove
@@ -251,7 +250,7 @@ def test_sql_template_with_numeric_dataset_name(setup_test_environment):
 
 def test_failed_registration_leaves_no_script(setup_test_environment):
     alcove = Alcove.init()
-    with pytest.raises(jsonschema.ValidationError):
+    with pytest.raises(ValueError, match="Did you mean snapshot://gdp_v2/latest"):
         new_table(alcove, "gdp/latest", ["snapshot://gdp.v2/latest"], "sql")
 
     assert not (TABLE_SCRIPT_DIR / "gdp/latest.sql").exists()
@@ -310,3 +309,37 @@ def test_template_refuses_existing_script(setup_test_environment):
     assert script.read_text() == "# mine\n"
     assert not (TABLE_SCRIPT_DIR / "example/latest.sql").exists()
     assert StepURI.parse("table://example/latest") not in Alcove().steps
+
+
+def test_snapshot_rejects_names_tables_cannot_depend_on(setup_test_environment):
+    Alcove.init()
+    csv = setup_test_environment / "nodes.csv"
+    csv.write_text("dim_node,value\nh100,3\n")
+
+    with pytest.raises(ValueError, match="snapshot://secrets/h100_prime_002/"):
+        snapshot_to_alcove(csv, "secrets/h100-prime-002/2026-10-15-1900")
+    assert StepURI.parse("snapshot://secrets/h100-prime-002/2026-10-15-1900") not in Alcove().steps
+
+
+def test_datetime_version_snapshot_works_as_dependency(setup_test_environment):
+    Alcove.init()
+    csv = setup_test_environment / "nodes.csv"
+    csv.write_text("dim_node,value\nh100,3\n")
+    snapshot_to_alcove(csv, "secrets/h100_prime_002/2026-10-15-1900")
+
+    new_table(
+        Alcove(),
+        "secrets/combined/2026-10-15-1900",
+        ["snapshot://secrets/h100_prime_002/2026-10-15-1900"],
+        "sql",
+    )
+    plan_and_run(Alcove())
+    assert (TABLE_DIR / "secrets/combined/2026-10-15-1900.parquet").exists()
+
+
+def test_new_table_rejects_hyphenated_table_name(setup_test_environment):
+    alcove = Alcove.init()
+    with pytest.raises(ValueError, match="Did you mean table://gdp_v2/latest"):
+        new_table(alcove, "gdp-v2/latest", [], "sql")
+
+    assert not (TABLE_SCRIPT_DIR / "gdp-v2/latest.sql").exists()

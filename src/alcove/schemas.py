@@ -1,4 +1,5 @@
 import json
+import re
 import jsonschema
 from pathlib import Path
 
@@ -15,6 +16,29 @@ def validate_snapshot(snapshot: dict) -> None:
     # Prune missing values
     pruned_snapshot = {k: v for k, v in snapshot.items() if v is not None}
     jsonschema.validate(pruned_snapshot, SNAPSHOT_SCHEMA)
+
+
+def check_step_uri(uri: str) -> None:
+    "Raise ValueError unless alcove.yaml would accept uri as a dependency."
+    rule = ALCOVE_SCHEMA["definitions"]["dependency"]
+    validator = jsonschema.Draft7Validator(rule)
+    if validator.is_valid(uri):
+        return
+
+    message = (
+        f"invalid step name {uri}: use snapshot://, table:// or artifact:// with "
+        f"lowercase letters, digits and underscores. {rule['description']}"
+    )
+
+    scheme, _, path = uri.partition("://")
+    *names, version = path.lower().split("/")
+    names = [re.sub(r"[^a-z0-9_*]", "_", n) for n in names]
+    version = re.sub(r"[^a-z0-9_*-]", "_", version)
+    suggestion = f"{scheme}://{'/'.join([*names, version])}"
+    if validator.is_valid(suggestion):
+        message += f" Did you mean {suggestion}?"
+
+    raise ValueError(message)
 
 
 SNAPSHOT_SCHEMA = json.loads(SNAPSHOT_SCHEMA_FILE.read_text())
