@@ -12,6 +12,34 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # "locked" tests what uv.lock pins; "latest" re-resolves every dependency
+    # to its newest allowed version, which is what a fresh install gets;
+    # "lowest" holds our direct dependencies at the floors in pyproject.toml
+    # (or above, where a dev dependency needs more). The resolution mode is set
+    # as an env var rather than a `uv sync` flag, since a later `uv run` in
+    # another mode re-resolves and installs the newest versions again
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - deps: locked
+            sync-args: ""
+            resolution: highest
+            make-target: test
+          - deps: latest
+            sync-args: --upgrade
+            resolution: highest
+            make-target: unittest
+          - deps: lowest
+            sync-args: ""
+            resolution: lowest-direct
+            make-target: unittest
+
+    name: build (${{ matrix.deps }} deps)
+
+    env:
+      UV_RESOLUTION: ${{ matrix.resolution }}
+
     services:
       minio:
         image: lazybit/minio
@@ -42,7 +70,11 @@ jobs:
           enable-plugins: nu_plugin_polars
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync ${{ matrix.sync-args }}
+
+      # `uv run` first, so this lists what the tests will actually run against
+      - name: Show resolved versions
+        run: uv run true && uv pip list
 
       - name: Set up testing minio bucket
         run: |
@@ -60,8 +92,10 @@ jobs:
           print(f'{minio.list_buckets()}')
           EOF
 
+      # other ruff and pyright versions bring other rules, which say nothing
+      # about whether alcove still works, so only lint against the lockfile
       - name: Run tests
-        run: make test
+        run: make ${{ matrix.make-target }}
         env:
           B2_APPLICATION_KEY: justtesting
           B2_APPLICATION_KEY_ID: justtesting

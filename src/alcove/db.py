@@ -66,7 +66,13 @@ class AlcoveDB:
         if query.count(" ") == 0:
             query = f'SELECT * FROM "{query}"'
 
-        return self._conn.execute(query).pl()
+        # duckdb 2.0 dropped .pl() from the connection, so go via a relation;
+        # before 2.0, conn.sql() returns None for statements with no result
+        result = self._conn.sql(query)
+        if result is None:
+            return pl.DataFrame()
+
+        return result.pl()
 
     def query(self, query: str) -> pl.DataFrame:
         return self.sql(query)

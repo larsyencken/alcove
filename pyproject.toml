@@ -10,7 +10,7 @@ dependencies = [
     "jsonschema>=4.23.0",
     "ruff>=0.5.5",
     "rich>=13.7.1",
-    "polars>=1.4.0",
+    "polars>=1.24.0",
     "duckdb>=1.0.0",
     "pyarrow>=23.0.0",
 ]
@@ -50,7 +50,7 @@ dev = [
     "pytest>=8.3.3",
     "ruff>=0.7.2",
     "pytest-docker>=2.0.0",
-    "docker>=7.0.0",
+    "docker>=7.1.0",
     "twine>=6.1.0",
     "hatchling>=1.27.0",
     "zensical>=0.0.23",
