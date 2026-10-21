@@ -67,11 +67,13 @@ _SECRET_HEADER = re.compile(
     re.IGNORECASE,
 )
 # credentials in a URL: https://user:pass@host or https://TOKEN@host
-_URL_USERINFO = re.compile(r"(\w+://)([^/?#\s@]+)@")
+_URL_USERINFO = re.compile(
+    r"(?<![\w+.-])([a-z][\w+.-]*://)([^/?#\s@'\",;<>()\[\]{}]+)@", re.I
+)
 # a query parameter whose value is likely a secret, e.g. ?token=, X-Amz-Signature=
 _SECRET_QUERY = re.compile(
-    r"([?&](?:(?:[a-z0-9]+[-_.])*(?:token|secret|signature|credential|password|api_?key|sig)"
-    r"(?:[-_.][a-z0-9]+)*|key)=)[^&\s'\"#]+",
+    r"([?&](?:(?:[a-z0-9]+[-_.])*(?:token|secret|signature|credential|password|api_?key|sig|auth)"
+    r"(?:[-_.][a-z0-9]+)*|(?:[a-z0-9]+[-_.])*key)=)[^&\s'\"#]+",
     re.IGNORECASE,
 )
 
@@ -202,18 +204,19 @@ def run_and_capture(
     assert proc.stderr is not None
     stderr_pipe = proc.stderr
     tail = bytearray()
+    lock = threading.Lock()
+    # set once the command has exited and the drain has timed out
+    stop = threading.Event()
+    trimmed = threading.Event()
 
     def pump() -> None:
-        try:
-            _pump()
-        except (ValueError, OSError):
-            # the pipe was closed under us, after the drain timeout
-            pass
-
-    def _pump() -> None:
         # e.g. under Jupyter, sys.stderr is text only
         out = getattr(sys.stderr, "buffer", None)
         for chunk in iter(lambda: stderr_pipe.read1(8192), b""):  # type: ignore[attr-defined]
+            if stop.is_set():
+                # a process the command started still writes; keep draining
+                # so it doesn't block, but stop passing it through
+                continue
             # keep draining whatever happens to the pass-through, or the
             # command blocks once the pipe fills
             try:
@@ -224,11 +227,16 @@ def run_and_capture(
                     sys.stderr.write(chunk.decode("utf-8", errors="replace"))
             except Exception:
                 pass
-            tail.extend(chunk)
-            # keep a little more than we need, so a cut doesn't split a character
-            if len(tail) > 4 * STDERR_TAIL_CHARS:
-                del tail[: len(tail) - 4 * STDERR_TAIL_CHARS]
+            with lock:
+                tail.extend(chunk)
+                # keep more than we need, so cutting doesn't split a character
+                if len(tail) > 4 * STDERR_TAIL_CHARS:
+                    del tail[: len(tail) - 4 * STDERR_TAIL_CHARS]
+                    trimmed.set()
 
+    # a daemon, so a process the command started that holds the pipe open
+    # (e.g. `sh -c 'slow >&2 & ...'`) can't keep alcove from exiting; closing
+    # the pipe instead would wait on the read it is blocked in
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
     try:
@@ -240,19 +248,22 @@ def run_and_capture(
         raise
     finally:
         reader.join(timeout=STDERR_DRAIN_SECONDS)
-        if reader.is_alive():
-            # a process the command started still holds the pipe; stop
-            # passing its output through
-            try:
-                stderr_pipe.close()
-            except Exception:
-                pass
+        stop.set()
 
-    # redact before cutting, so a cut through a secret can't hide it from the rules
-    stderr = redact_text(tail.decode("utf-8", errors="replace")).strip()
+    with lock:
+        text = tail.decode("utf-8", errors="replace")
+    if trimmed.is_set():
+        # the buffer starts mid-line, where the rules can't see a secret's
+        # start: drop up to the first line break (e.g. a progress bar's \r),
+        # or failing that the first space
+        first = re.search(r"[\r\n]", text) or re.search(r"\s", text)
+        text = text[first.end() :] if first else ""
+
+    # redact before cutting, so this cut can only clip a REDACTED
+    stderr = redact_text(text).strip()
     if len(stderr) > STDERR_TAIL_CHARS:
         stderr = stderr[-STDERR_TAIL_CHARS:]
-        # start at a whole line
+        # start at a whole line, if there is one
         stderr = stderr.partition("\n")[2] or stderr
     return returncode, stderr
 

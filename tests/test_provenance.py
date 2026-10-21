@@ -1,6 +1,7 @@
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from alcove import (
     snapshot_to_alcove,
 )
 from alcove.core import Alcove
-from alcove.provenance import REDACTED, STDERR_TAIL_CHARS, redact
+from alcove.provenance import REDACTED, STDERR_TAIL_CHARS, redact, redact_text
 from alcove.snapshots import Snapshot
 from alcove.storage import StorageConfig
 from alcove.types import StepURI
@@ -186,6 +187,44 @@ def test_extra_produced_by_values_must_be_plain_data(project):
         Path("x.txt"), "a/b/latest", produced_by={"range": ("2026-10-01", "2026-10-07")}
     )
     assert produced_by(snapshot.uri)["range"] == ["2026-10-01", "2026-10-07"]
+
+
+def test_capture_doesnt_wait_for_a_background_process_holding_stderr(project):
+    started = time.monotonic()
+    snapshot = capture_to_alcove(
+        "a/b", ["sh", "-c", "sleep 30 >&2 & echo hi"], version="2026-10-07-1443"
+    )
+    assert time.monotonic() - started < 10
+    assert snapshot.path.read_text() == "hi\n"
+
+
+def test_redaction_is_fast_on_a_long_argument():
+    started = time.monotonic()
+    redact(["curl", "--data-binary", "QUJD" * 250_000])
+    assert time.monotonic() - started < 2
+
+
+def test_redact_text_leaves_an_email_in_json_alone():
+    text = '{"url":"https://h","email":"a@b.com"}'
+    assert redact_text(text) == text
+
+
+def test_a_long_stderr_line_keeps_its_tail(project):
+    snapshot = capture_to_alcove(
+        "a/b", ["sh", "-c", "printf '%05000d' 7 >&2"], version="2026-10-07-1443"
+    )
+    stderr = produced_by(snapshot.uri)["stderr"]
+    assert len(stderr) == STDERR_TAIL_CHARS
+    assert stderr.endswith("7")
+
+
+def test_progress_bar_stderr_keeps_its_tail(project):
+    # 12000 bytes of \r-separated updates and no \n, as from tqdm or curl
+    script = "for i in $(seq 1000 2000); do printf '%s%%  |#####|\\r' $i >&2; done"
+    snapshot = capture_to_alcove("a/b", ["sh", "-c", script], version="2026-10-07-1443")
+    stderr = produced_by(snapshot.uri)["stderr"]
+    assert stderr
+    assert "2000%" in stderr
 
 
 def test_a_secret_where_stderr_is_cut_is_still_hidden(project):
@@ -410,6 +449,11 @@ def test_snapshots_without_produced_by_still_load(project):
             ["sh", "-c", "GITHUB_TOKEN=abc gh api /user"],
             ["sh", "-c", f"GITHUB_TOKEN={REDACTED} gh api /user"],
         ),
+        (["https://h/x?auth=abc"], [f"https://h/x?auth={REDACTED}"]),
+        (
+            ["https://h/x?access_key=AKIA1&sort_key=d"],
+            [f"https://h/x?access_key={REDACTED}&sort_key={REDACTED}"],
+        ),
         # not secrets
         (["git", "log", "--author", "lars"], ["git", "log", "--author", "lars"]),
         (["kubectl", "--context", "prime"], ["kubectl", "--context", "prime"]),
@@ -445,8 +489,8 @@ def test_snapshots_without_produced_by_still_load(project):
         ),
         # whole words only
         (
-            ["https://api.github.com/search?q=x&author=lars&sort_key=d&monkey=1"],
-            ["https://api.github.com/search?q=x&author=lars&sort_key=d&monkey=1"],
+            ["https://api.github.com/search?q=x&author=lars&keyword=d&monkey=1"],
+            ["https://api.github.com/search?q=x&author=lars&keyword=d&monkey=1"],
         ),
         (
             ["train.py", "max_tokens=512", "tokenizer=gpt2"],
