@@ -1,3 +1,4 @@
+import json
 import os
 
 import polars as pl
@@ -172,3 +173,50 @@ def test_union_view_in_tables_list(alcove_with_wildcard_tables):
     assert "costs_20250217" in db.tables
     assert "costs_20250218" in db.tables
     db.close()
+
+
+def test_sql_statement_without_result(alcove_with_tables):
+    with AlcoveDB(alcove=alcove_with_tables) as db:
+        df = db.sql("SET timezone = 'UTC'")
+        assert isinstance(df, pl.DataFrame)
+        assert df.is_empty()
+
+
+def test_execute_query_json(alcove_with_tables, capsys):
+    from alcove import execute_query
+
+    execute_query(alcove_with_tables, "SELECT * FROM things_latest WHERE dim_id < 3")
+    assert json.loads(capsys.readouterr().out) == [
+        {"dim_id": 1, "value": "a"},
+        {"dim_id": 2, "value": "b"},
+    ]
+
+
+def test_execute_query_csv(alcove_with_tables, capsys):
+    from alcove import execute_query
+
+    execute_query(alcove_with_tables, "things_latest", csv=True)
+    assert capsys.readouterr().out == "dim_id,value\n1,a\n2,b\n3,c\n"
+
+
+def test_execute_query_csv_nested_columns(alcove_with_tables, capsys):
+    from alcove import execute_query
+
+    execute_query(
+        alcove_with_tables,
+        "SELECT [1, 2] AS l, {'k': 'v'} AS st, NULL::INT[] AS n",
+        csv=True,
+    )
+    assert capsys.readouterr().out == 'l,st,n\n"[1, 2]","{""k"": ""v""}",\n'
+
+
+def test_execute_query_json_time_columns(alcove_with_tables, capsys):
+    from alcove import execute_query
+
+    execute_query(
+        alcove_with_tables,
+        "SELECT TIME '01:02:03.5' AS t, [TIME '01:00:00'] AS l",
+    )
+    assert json.loads(capsys.readouterr().out) == [
+        {"t": "01:02:03.500", "l": ["01:00:00"]}
+    ]

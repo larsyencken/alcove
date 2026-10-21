@@ -346,6 +346,11 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
+- `dev`
+  - `alcove db "<query>"` and `AlcoveDB.sql()` / `.query()` work with duckdb 2.0; previously they failed with `'DuckDBPyConnection' object has no attribute 'pl'` ([#80](https://github.com/larsyencken/alcove/issues/80))
+  - `alcove db "<query>"` no longer needs pandas, which alcove never installed, so it failed with `No module named 'pandas'` unless pandas happened to be present. JSON output now writes dates and timestamps as strings (`"2024-01-02"`, `"2024-01-02 03:04:05"`) rather than epoch milliseconds; with `--csv`, booleans are `true`/`false`, timestamps are `2024-01-02T03:04:05.000000`, NaN is `NaN` rather than empty, and list and struct columns are written as JSON
+  - Requires polars 1.24 or later, the first that can write `TIME` columns as JSON
+  - With duckdb 1.x, `AlcoveDB.sql()` returns an empty DataFrame for statements with no result set, such as `INSERT` or `SET`, rather than a `Count` or `Success` column (with a one-row count for `INSERT` and `UPDATE`)
 - `0.6.0` (2026-10-21)
   - Added `alcove rename <old> <new>`, which renames every version of a snapshot, table or artifact, and updates `alcove.yaml`, its scripts or snapshot metadata and data, the template variables of SQL steps that read it, and its URIs in other step scripts and configs; it lists the lines in other files that still mention the old name (see [Renaming a dataset](docs/commands.md#renaming-a-dataset))
   - When a step's Python or nushell script fails, `alcove run` and `alcove export-duckdb` exit with the script's own error message and exit code, instead of following it with a Python traceback ending in `CalledProcessError`; a script killed by a signal gets a one-line `killed by SIGKILL`-style error and exit code 128+N

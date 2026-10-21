@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import re
 import signal
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 import duckdb
+import polars as pl
 from dotenv import find_dotenv, load_dotenv
 
 from alcove import steps
@@ -915,12 +917,25 @@ def execute_query(
     csv: bool = False,
 ) -> None:
     with AlcoveDB(alcove=alcove, names=names) as db:
-        result = db.sql(query).to_pandas()
+        result = db.sql(query)
 
         if csv:
-            print(result.to_csv(index=False))
+            # CSV has no nested types, so write lists and structs as JSON
+            nested = [c for c, t in result.schema.items() if t.is_nested()]
+            result = result.with_columns(
+                pl.Series(
+                    c,
+                    [
+                        None if v is None else json.dumps(v, default=str)
+                        for v in result[c].to_list()
+                    ],
+                    dtype=pl.String,
+                )
+                for c in nested
+            )
+            print(result.write_csv(), end="")
         else:
-            print(result.to_json(orient="records"))
+            print(result.write_json())
 
 
 def duckdb_shell(alcove: Alcove, names: str = "both") -> None:
