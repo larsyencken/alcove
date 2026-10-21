@@ -58,6 +58,41 @@
     "license_url": {
       "type": "string",
       "pattern": "^https?://[A-Za-z0-9-._~:/?#[\\]@!$&'()*+,;=%]+$"
+    },
+    "produced_by": {
+      "type": "object",
+      "description": "How this version was made, written by alcove when it was snapshotted. Unlike the fields above, it describes one version and is never carried over to the next. Scripts may add keys of their own.",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The command that made the data, with likely secrets redacted"
+        },
+        "script": {
+          "type": "string",
+          "description": "The Python script that called alcove, relative to the alcove"
+        },
+        "git_commit": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40,64}$"
+        },
+        "script_changed": {
+          "type": "boolean",
+          "description": "Whether the script differed from git_commit when it ran"
+        },
+        "snapshotted_at": { "type": "string" },
+        "started_at": { "type": "string" },
+        "finished_at": { "type": "string" },
+        "exit_code": { "type": "integer" },
+        "stderr": {
+          "type": "string",
+          "description": "The end of what the command wrote to stderr"
+        },
+        "note": { "type": "string" },
+        "host": { "type": "string" },
+        "alcove_version": { "type": "string" }
+      },
+      "additionalProperties": true
     }
   },
   "required": ["version", "uri", "checksum"],

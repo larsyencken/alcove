@@ -5,9 +5,9 @@ import re
 import signal
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Optional
 
 import duckdb
 import polars as pl
@@ -25,6 +25,14 @@ from alcove.db import (
     _better_alias,
 )
 from alcove.exceptions import StepDefinitionError, StepScriptError
+from alcove.paths import SNAPSHOT_DIR
+from alcove.provenance import (
+    CommandNotFound,
+    describe_caller,
+    redact,
+    run_and_capture,
+    utc_now,
+)
 from alcove.rename import rename_dataset
 from alcove.partitions import (
     ORPHANED_DIR,
@@ -98,6 +106,51 @@ def main():
         "-f",
         action="store_true",
         help="Overwrite an existing snapshot with the same name",
+    )
+
+    capture_parser = subparsers.add_parser(
+        "capture",
+        help="Run a command and snapshot its output, recording how it was made",
+        description="Run a command and snapshot its output, recording the "
+        "command, when it ran and how it exited in the snapshot's produced_by "
+        "metadata. Put the command after --; it runs without a shell, so for "
+        "a pipeline use: -- sh -c '...'",
+    )
+    capture_parser.add_argument(
+        "dataset_name",
+        type=str,
+        help="Dataset to snapshot into, e.g. prime_001/k3s_log",
+    )
+    capture_parser.add_argument(
+        # not `command`, which names the subcommand
+        "captured_command",
+        metavar="command",
+        nargs="*",
+        help="The command to run, after --",
+    )
+    capture_parser.add_argument(
+        "--version",
+        help="Version to snapshot as (default: the UTC time, YYYY-MM-DD-HHMM, "
+        "or the UTC date for a partitioned dataset)",
+    )
+    capture_parser.add_argument(
+        "--note", help="A note to keep with the record of how it was made"
+    )
+    capture_parser.add_argument(
+        "--dir",
+        action="store_true",
+        help="Snapshot the files the command writes into the empty directory "
+        "it runs in, rather than its stdout",
+    )
+    capture_parser.add_argument(
+        "--ext",
+        default=".txt",
+        help="Extension for a captured stdout (default: .txt)",
+    )
+    capture_parser.add_argument(
+        "--keep-failed",
+        action="store_true",
+        help="Snapshot the output even if the command fails",
     )
 
     run_parser = subparsers.add_parser(
@@ -276,6 +329,39 @@ def main():
         )
         return
 
+    elif args.command == "capture":
+        try:
+            capture_to_alcove(
+                args.dataset_name,
+                args.captured_command,
+                version=args.version,
+                note=args.note,
+                directory=args.dir,
+                extension=args.ext,
+                keep_failed=args.keep_failed,
+            )
+        except CommandNotFound as e:
+            parser.exit(127, f"alcove: error: command not found: {e}\n")
+        except KeyboardInterrupt:
+            parser.exit(130, "alcove: interrupted\n")
+        except CaptureFailed as e:
+            # a command killed by signal N exits 128+N, as from a shell
+            code = e.returncode if e.returncode > 0 else 128 - e.returncode
+            if e.snapshot is None:
+                parser.exit(
+                    code,
+                    f"alcove: error: the command exited with {e.returncode}, so "
+                    "nothing was snapshotted; use --keep-failed to keep its output\n",
+                )
+            parser.exit(
+                code,
+                f"alcove: the command exited with {e.returncode}; snapshotted "
+                f"its output anyway as {e.snapshot.uri}\n",
+            )
+        except ValueError as e:
+            parser.exit(1, f"alcove: error: {e}\n")
+        return
+
     elif args.command == "list":
         return list_steps_cmd(
             alcove, args.regex, args.paths, args.full, args.alphabetical
@@ -352,12 +438,79 @@ def init_alcove(storage: StorageConfig | None = None) -> None:
 
 
 def snapshot_to_alcove(
-    file_path: Path, dataset_name: str, edit: bool = False, force: bool = False
+    file_path: Path,
+    dataset_name: str,
+    edit: bool = False,
+    force: bool = False,
+    produced_by: dict[str, Any] | None = None,
 ) -> Snapshot:
+    """Add a file or folder to the alcove as a new snapshot version.
+
+    Its `produced_by` metadata records how it was made: the calling script (if
+    any) and its arguments, the commit it ran at and when, plus any keys given
+    in `produced_by`.
+    """
     alcove = Alcove()
     if alcove.storage.backend == "s3":
         _check_s3_credentials()
 
+    proposed_uri, partitioned = _name_snapshot(alcove, dataset_name, force)
+    dataset_name = proposed_uri.path
+
+    # keep the descriptive metadata of the snapshot we are replacing or, for a
+    # new partition, of the dataset's most recent partition
+    metadata_source = None
+    if proposed_uri in alcove.steps:
+        metadata_source = proposed_uri
+    elif partitioned and alcove.versions(proposed_uri):
+        metadata_source = proposed_uri.with_version(alcove.versions(proposed_uri)[-1])
+
+    existing_metadata = {}
+    if metadata_source:
+        for k, v in Snapshot.load(metadata_source.path).get_metadata().items():
+            if k not in ["checksum", "manifest", "date_accessed"]:
+                existing_metadata[k] = v
+
+    if partitioned:
+        # a partition is named by the date its data covers, so record
+        # separately when it was fetched
+        existing_metadata["date_accessed"] = datetime.today().strftime("%Y-%m-%d")
+
+    # unlike the metadata above, this describes only the version being made
+    existing_metadata["produced_by"] = describe_caller(produced_by)
+
+    # create and add to s3
+    print(f"Creating {proposed_uri}")
+    snapshot = Snapshot.create(file_path, dataset_name, existing_metadata)
+
+    # ensure that the data itself does not enter git (if not already ignored)
+    from alcove.utils import add_pattern_to_data_gitignore, add_to_data_gitignore
+
+    if partitioned:
+        # one pattern covers every partition of the dataset
+        extension = snapshot.extension if snapshot.snapshot_type == "file" else None
+        add_pattern_to_data_gitignore(
+            partition_gitignore_entry(proposed_uri.base_path, extension)
+        )
+    else:
+        add_to_data_gitignore(snapshot.path)
+
+    if edit:
+        subprocess.run(["vim", snapshot.metadata_path])
+
+    if not partitioned:
+        # partitions are discovered from their metadata, not listed in alcove.yaml
+        alcove.steps[proposed_uri] = []
+        alcove.save()
+
+    return snapshot
+
+
+def _name_snapshot(
+    alcove: Alcove, dataset_name: str, force: bool = False
+) -> tuple[StepURI, bool]:
+    """The snapshot a new version of `dataset_name` would be, and whether it is
+    a partition. Raises ValueError for a name alcove would refuse."""
     # a partition must be named by its date before any default version is
     # appended, or `foo/2026-1-5` would become a new dataset `foo/2026-1-5/<today>`
     dataset_name = dataset_name.strip("/")
@@ -396,48 +549,102 @@ def snapshot_to_alcove(
     if proposed_uri in alcove.steps and not force:
         raise ValueError(f"Dataset already exists in alcove: {proposed_uri}")
 
-    # keep the descriptive metadata of the snapshot we are replacing or, for a
-    # new partition, of the dataset's most recent partition
-    metadata_source = None
-    if proposed_uri in alcove.steps:
-        metadata_source = proposed_uri
-    elif partitioned and alcove.versions(proposed_uri):
-        metadata_source = proposed_uri.with_version(alcove.versions(proposed_uri)[-1])
+    return proposed_uri, partitioned
 
-    existing_metadata = {}
-    if metadata_source:
-        for k, v in Snapshot.load(metadata_source.path).get_metadata().items():
-            if k not in ["checksum", "manifest", "date_accessed"]:
-                existing_metadata[k] = v
 
-    if partitioned:
-        # a partition is named by the date its data covers, so record
-        # separately when it was fetched
-        existing_metadata["date_accessed"] = datetime.today().strftime("%Y-%m-%d")
+class CaptureFailed(Exception):
+    "The captured command exited with an error."
 
-    # create and add to s3
-    print(f"Creating {proposed_uri}")
-    snapshot = Snapshot.create(file_path, dataset_name, existing_metadata)
+    def __init__(self, returncode: int, snapshot: Optional[Snapshot]) -> None:
+        super().__init__(f"the command exited with {returncode}")
+        self.returncode = returncode
+        self.snapshot = snapshot
 
-    # ensure that the data itself does not enter git (if not already ignored)
-    from alcove.utils import add_pattern_to_data_gitignore, add_to_data_gitignore
 
-    if partitioned:
-        # one pattern covers every partition of the dataset
-        extension = snapshot.extension if snapshot.snapshot_type == "file" else None
-        add_pattern_to_data_gitignore(
-            partition_gitignore_entry(proposed_uri.base_path, extension)
+def capture_to_alcove(
+    dataset_name: str,
+    command: list[str],
+    version: Optional[str] = None,
+    note: Optional[str] = None,
+    directory: bool = False,
+    extension: str = ".txt",
+    keep_failed: bool = False,
+) -> Snapshot:
+    """Run a command and snapshot what it produces, recording how in `produced_by`.
+
+    The snapshot is its stdout, or, with `directory`, the files it writes into
+    the empty directory it runs in. Without a version in `dataset_name` or
+    `version`, the version is the UTC time it ran (YYYY-MM-DD-HHMM), or the
+    UTC date for a partitioned dataset.
+
+    If the command fails, raises CaptureFailed. Its output is snapshotted
+    anyway only with `keep_failed`.
+    """
+    if not command:
+        raise ValueError("give the command to capture after --")
+    if not directory and not re.fullmatch(r"\.[a-z0-9]+", extension):
+        raise ValueError(f"invalid extension {extension!r}: use e.g. .txt or .json")
+
+    # name the snapshot, and refuse a bad or taken name, before running
+    # anything: the same checks snapshot_to_alcove makes afterwards
+    dataset_name = dataset_name.strip("/")
+    alcove = Alcove()
+    if alcove.storage.backend == "s3":
+        _check_s3_credentials()
+    if version is not None and not _is_valid_version(version):
+        raise ValueError(
+            f"invalid version {version!r}: use an ISO date, optionally followed "
+            "by more, e.g. 2026-10-07 or 2026-10-07-1443, or latest"
         )
-    else:
-        add_to_data_gitignore(snapshot.path)
+    if version is None and not _is_valid_version(dataset_name.split("/")[-1]):
+        now = datetime.now(timezone.utc)
+        if alcove.is_partitioned(StepURI("snapshot", f"{dataset_name}/*")):
+            version = now.strftime("%Y-%m-%d")
+        else:
+            version = now.strftime("%Y-%m-%d-%H%M")
+    if version is not None:
+        dataset_name = f"{dataset_name}/{version}"
+    uri, _ = _name_snapshot(alcove, dataset_name)
+    if (SNAPSHOT_DIR / f"{uri.path}.meta.yaml").exists():
+        raise ValueError(f"{uri} already exists; give another version with --version")
+    dataset_name = uri.path
 
-    if edit:
-        subprocess.run(["vim", snapshot.metadata_path])
+    started_at = utc_now()
+    with tempfile.TemporaryDirectory() as tmp:
+        if directory:
+            out = Path(tmp) / "out"
+            out.mkdir()
+            returncode, stderr = run_and_capture(command, None, cwd=out)
+        else:
+            out = Path(tmp) / f"output{extension}"
+            with out.open("wb") as f:
+                returncode, stderr = run_and_capture(command, f)
+        finished_at = utc_now()
 
-    if not partitioned:
-        # partitions are discovered from their metadata, not listed in alcove.yaml
-        alcove.steps[proposed_uri] = []
-        alcove.save()
+        if returncode != 0 and not keep_failed:
+            raise CaptureFailed(returncode, None)
+        if directory and not any(p.is_file() for p in out.rglob("*")):
+            if returncode != 0:
+                raise CaptureFailed(returncode, None)
+            raise ValueError(
+                "the command wrote no files into the directory it ran in, "
+                "so there is nothing to snapshot"
+            )
+
+        record: dict[str, Any] = {
+            "command": redact(command),
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "exit_code": returncode,
+        }
+        if stderr:
+            record["stderr"] = stderr
+        if note:
+            record["note"] = note
+        snapshot = snapshot_to_alcove(out, dataset_name, produced_by=record)
+
+    if returncode != 0:
+        raise CaptureFailed(returncode, snapshot)
 
     return snapshot
 
@@ -974,7 +1181,10 @@ def _maybe_add_version(dataset_name: str) -> str:
 
     if _is_valid_version(parts[-1]):
         if len(parts) == 1:
-            raise Exception("invalid dataset name")
+            raise ValueError(
+                f"invalid dataset name {dataset_name!r}: give the dataset a name "
+                "before its version, e.g. countries/latest"
+            )
 
         # the final segment is a version, all good
         return dataset_name

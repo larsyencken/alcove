@@ -11,6 +11,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
@@ -58,6 +59,10 @@ class Snapshot:
     license: Optional[str] = None
     license_url: Optional[str] = None
 
+    # how this version was made; the fields above describe the dataset and
+    # carry over to its next version, this never does
+    produced_by: Optional[dict[str, Any]] = None
+
     @property
     def path(self):
         if self.snapshot_type == "file":
@@ -80,6 +85,12 @@ class Snapshot:
         metadata = load_yaml(metadata_file)
         if "date_accessed" in metadata:
             metadata["date_accessed"] = str(metadata["date_accessed"])
+        if isinstance(metadata.get("produced_by"), dict):
+            # an unquoted timestamp, e.g. from editing by hand, loads as a datetime
+            metadata["produced_by"] = {
+                k: v.isoformat() if isinstance(v, (datetime, date)) else v
+                for k, v in metadata["produced_by"].items()
+            }
         jsonschema.validate(metadata, SNAPSHOT_SCHEMA)
 
         metadata["uri"] = StepURI.parse(metadata["uri"])

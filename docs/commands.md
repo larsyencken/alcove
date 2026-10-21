@@ -8,6 +8,7 @@ Alcove provides the following commands:
 |---------|-------------|
 | `alcove init` | Initialize a new alcove workspace |
 | `alcove snapshot <path> <dataset>` | Add a file or directory to your alcove |
+| `alcove capture <dataset> -- <command>` | Run a command and snapshot its output, recording how it was made (see [Capturing a command's output](#capturing-a-commands-output)) |
 | `alcove run` | Build all tables and fetch outdated data |
 | `alcove list` | List all datasets, dependencies first, with consecutive days collapsed into one range (`--full` lists each one) |
 | `alcove audit` | Validate the alcove metadata |
@@ -157,3 +158,20 @@ Built tables and artifacts move to the new name, and are rebuilt on the next `al
 It refuses, changing nothing, if the new name is already a dataset, or if files are already at the new name, such as a stray script or the metadata of a snapshot `alcove.yaml` doesn't name, which the renamed dataset would otherwise pick up as its own.
 
 Alcove leaves alone text it doesn't manage, such as a Python script that reads a table by its path, a snapshot script that names its dataset, or a query against an `alcove db` view. Afterwards it lists each line in the project's files that still mentions the old name, so you can check them. Use `--dry-run` to see what would change first, including those lines.
+
+## Capturing a command's output
+
+`alcove capture` runs a command and snapshots what it prints, recording how in the snapshot's `produced_by` metadata: the command, when it started and finished, its exit code and the end of its stderr.
+
+```bash
+alcove capture prime_001/k3s_log --note "via the kubelet proxy" -- kubectl get --raw /api/v1/nodes/gpu-002/proxy/logs/...
+```
+
+Put the command after `--`. It runs without a shell, so for a pipeline use `-- sh -c '...'`. Without a version in the name or `--version`, the snapshot is versioned by the UTC time it ran, e.g. `snapshot://prime_001/k3s_log/2026-10-07-1443`, or by the UTC date in a partitioned dataset. Alcove checks the name before running anything, so a bad or taken name doesn't cost you a slow command.
+
+- `--ext .json` names the captured output's extension (default `.txt`)
+- `--dir` runs the command in an empty directory and snapshots the files it writes there, rather than its stdout; give it absolute paths to anything it reads, including the command itself if it isn't on `PATH`
+- `--note` keeps a note with the record
+- If the command fails, nothing is snapshotted, and `alcove capture` exits as the command did (128+N if killed by signal N). `--keep-failed` snapshots its output anyway, with its `exit_code` recorded, and still exits as the command did
+
+Values in the command and its stderr that look like secrets are redacted before they are written down, and environment variables are never recorded; see the README's [Recording how a snapshot was made](https://github.com/larsyencken/alcove#recording-how-a-snapshot-was-made) for what is caught.

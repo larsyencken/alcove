@@ -170,7 +170,40 @@ alcove snapshot ~/Downloads/countries.csv countries/latest
 
 This will add the file to your alcove's store, and create a metadata file at `data/<dataset_name>.meta.yaml` directory for you to complete.
 
-The metadata format has some minimum fields, but is meant for you to extend as needed for your own purposes. Best practice would be to retain the provenance and licence information of any data you add to your alcove, especially if it originates from a third party.
+The metadata has two kinds of fields. The descriptive ones (`name`, `description`, `source_name`, `source_url`, `date_accessed`, `access_notes`, `license`, `license_url`) are yours to fill in: they describe the dataset, and a new version of it starts with the previous version's. Best practice would be to retain the provenance and licence information of any data you add to your alcove, especially if it originates from a third party.
+
+### Recording how a snapshot was made
+
+Alcove fills in a `produced_by` record itself, describing how this version was made. Unlike the descriptive fields, it is never carried over to the next version:
+
+```yaml
+produced_by:
+  command: [src/steps/snapshots/gpu/allocation.py, --start, '2026-10-01']
+  script: src/steps/snapshots/gpu/allocation.py
+  git_commit: 9ca6887cd0a9aef8b39f7481fae3d2d1e986b702
+  script_changed: false
+  snapshotted_at: '2026-10-21T20:11:49+00:00'
+  host: seagrass.local
+  alcove_version: 0.6.0
+```
+
+When a Python script calls `snapshot_to_alcove()`, the record names the script and its arguments, the commit checked out where it lives, and whether it had uncommitted changes. From `alcove snapshot`, it records that command. A script can add keys of its own, or replace alcove's, with `snapshot_to_alcove(path, name, produced_by={"query": ...})`.
+
+The record is written into the `.meta.yaml`, which is usually committed, so mind what it says. In the command, and in a captured command's stderr, alcove writes your home directory as `~` and hides values that look like secrets: those of flags such as `--token`, `--api-key` or `--db-password`, `TOKEN=` style assignments, `Authorization:` and `*-Token:` headers, whatever comes before the `@` in a URL (including a plain username, as in `ssh://git@github.com`), and URL query parameters named like a token, key or signature (e.g. `X-Amz-Signature`). The same rules apply inside a shell script passed as one argument, as to `sh -c`. It never records environment variables, so pass secrets that way. Redaction is best effort: a secret passed in another form, such as `curl -u user:pass` or `mysql -pSECRET`, is written down. Values given in `produced_by={...}` must be plain data (strings, numbers, booleans, lists and dicts) and are written as given.
+
+### Capturing a command's output
+
+`alcove capture` runs a command and snapshots what it prints, recording the command, when it ran, how it exited and the end of its stderr in `produced_by`:
+
+```bash
+alcove capture prime_001/k3s_log --note "via the kubelet proxy" -- kubectl get --raw /api/v1/nodes/gpu-002/proxy/logs/...
+```
+
+Put the command after `--`. It runs without a shell, so for a pipeline use `-- sh -c '...'`. Without a version in the name or `--version`, the snapshot is versioned by the UTC time it ran, e.g. `snapshot://prime_001/k3s_log/2026-10-07-1443`, or by the UTC date in a partitioned dataset. Alcove checks the name before running anything.
+
+- `--ext .json` names the captured output's extension (default `.txt`)
+- `--dir` runs the command in an empty directory and snapshots the files it writes there, rather than its stdout; give it absolute paths to anything it reads, including the command itself if it isn't on `PATH`
+- If the command fails, nothing is snapshotted, and `alcove capture` exits as the command did. `--keep-failed` snapshots its output anyway, with its `exit_code` recorded, and still exits as the command did
 
 ### Creating a new table
 
@@ -287,6 +320,7 @@ Alcove provides the following commands:
 
 - `alcove init` - Initialize a new alcove workspace
 - `alcove snapshot <path> <dataset>` - Add a file or directory to your alcove
+- `alcove capture <dataset> -- <command>` - Run a command and snapshot its output, recording how it was made
 - `alcove run` - Build all tables and fetch outdated data
 - `alcove list` - List all datasets, dependencies first, with consecutive days collapsed into one range (`--full` lists each one)
 - `alcove audit` - Validate the alcove metadata
@@ -351,6 +385,8 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
   - `alcove db "<query>"` no longer needs pandas, which alcove never installed, so it failed with `No module named 'pandas'` unless pandas happened to be present. JSON output now writes dates and timestamps as strings (`"2024-01-02"`, `"2024-01-02 03:04:05"`) rather than epoch milliseconds; with `--csv`, booleans are `true`/`false`, timestamps are `2024-01-02T03:04:05.000000`, NaN is `NaN` rather than empty, and list and struct columns are written as JSON
   - Requires polars 1.24 or later, the first that can write `TIME` columns as JSON
   - With duckdb 1.x, `AlcoveDB.sql()` returns an empty DataFrame for statements with no result set, such as `INSERT` or `SET`, rather than a `Count` or `Success` column (with a one-row count for `INSERT` and `UPDATE`)
+  - Every new snapshot records how it was made in a `produced_by` block of its metadata: the script that called `snapshot_to_alcove()` and its arguments, the commit it ran at and whether it had uncommitted changes (or the `alcove snapshot` command), when, on which host, and with which alcove version. It is never carried over to the next version, as the descriptive fields are. Scripts can add keys of their own with `produced_by={...}`. Values that look like secrets are redacted, and the home directory is written as `~` (see [Recording how a snapshot was made](#recording-how-a-snapshot-was-made))
+  - Added `alcove capture <dataset> -- <command>`, which runs a command and snapshots its stdout, or with `--dir` the files it writes, versioned by the UTC time it ran, recording the command, its start and end times, exit code and the end of its stderr in `produced_by`. A failed command snapshots nothing unless given `--keep-failed`, and `alcove capture` exits as the command did (see [Capturing a command's output](#capturing-a-commands-output))
 - `0.6.0` (2026-10-21)
   - Added `alcove rename <old> <new>`, which renames every version of a snapshot, table or artifact, and updates `alcove.yaml`, its scripts or snapshot metadata and data, the template variables of SQL steps that read it, and its URIs in other step scripts and configs; it lists the lines in other files that still mention the old name (see [Renaming a dataset](docs/commands.md#renaming-a-dataset))
   - When a step's Python or nushell script fails, `alcove run` and `alcove export-duckdb` exit with the script's own error message and exit code, instead of following it with a Python traceback ending in `CalledProcessError`; a script killed by a signal gets a one-line `killed by SIGKILL`-style error and exit code 128+N
