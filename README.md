@@ -346,7 +346,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
-- `dev`
+- `0.6.0` (2026-10-21)
   - Added `alcove rename <old> <new>`, which renames every version of a snapshot, table or artifact, and updates `alcove.yaml`, its scripts or snapshot metadata and data, the template variables of SQL steps that read it, and its URIs in other step scripts and configs; it lists the lines in other files that still mention the old name (see [Renaming a dataset](docs/commands.md#renaming-a-dataset))
   - When a step's Python or nushell script fails, `alcove run` and `alcove export-duckdb` exit with the script's own error message and exit code, instead of following it with a Python traceback ending in `CalledProcessError`; a script killed by a signal gets a one-line `killed by SIGKILL`-style error and exit code 128+N
   - `alcove snapshot` rejects names that tables could not depend on (hyphens outside the final version segment, e.g. `secrets/h100-prime-002/2026-10-15-1900`) before uploading anything, suggesting the underscored name; previously it accepted them and `alcove new-table` later failed with a schema traceback. `new-table` and `new-artifact` give the same error for such dependencies, and now also refuse such names for the new step itself. `alcove.yaml` and step metadata files now reject such names when loaded, so a project that has them fails with a schema error until they are renamed
