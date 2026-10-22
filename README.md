@@ -380,7 +380,7 @@ Please report any issues at: <https://github.com/larsyencken/alcove/issues>
 
 ## Changelog
 
-- `dev`
+- `0.6.1` (2026-10-22)
   - `alcove db "<query>"` and `AlcoveDB.sql()` / `.query()` work with duckdb 2.0; previously they failed with `'DuckDBPyConnection' object has no attribute 'pl'` ([#80](https://github.com/larsyencken/alcove/issues/80))
   - `alcove db "<query>"` no longer needs pandas, which alcove never installed, so it failed with `No module named 'pandas'` unless pandas happened to be present. JSON output now writes dates and timestamps as strings (`"2024-01-02"`, `"2024-01-02 03:04:05"`) rather than epoch milliseconds; with `--csv`, booleans are `true`/`false`, timestamps are `2024-01-02T03:04:05.000000`, NaN is `NaN` rather than empty, and list and struct columns are written as JSON
   - Requires polars 1.24 or later, the first that can write `TIME` columns as JSON
